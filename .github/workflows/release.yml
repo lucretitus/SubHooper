@@ -1,0 +1,52 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/gui/src-tauri
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install frontend dependencies
+        working-directory: app/gui
+        run: npm ci
+      - name: Validate source
+        shell: pwsh
+        run: |
+          if ((Get-Content app/gui/src-tauri/tauri.conf.json -Raw).Contains('REPLACE_WITH_')) {
+            throw 'Run Configure-GitHub.cmd and commit the configured public updater endpoint/key.'
+          }
+          npm --prefix app/gui test
+          python -m unittest discover -s app/tests -v
+          cargo test --manifest-path app/gui/src-tauri/Cargo.toml
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app/gui
+          tagName: ${{ github.ref_name }}
+          releaseName: 'SubHooper ${{ github.ref_name }} beta'
+          releaseBody: 'Windows beta build. Complete the acceptance checklist before wider use.'
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true

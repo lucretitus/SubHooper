@@ -1,0 +1,11 @@
+.venv/
+results/
+.runtime/
+temp/
+__pycache__/
+*.pyc
+gui/node_modules/
+gui/dist/
+gui/src-tauri/target/
+.gui-ready-*
+gui-setup.log

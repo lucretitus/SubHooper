@@ -1,0 +1,41 @@
+name: Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/gui/src-tauri
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Frontend dependencies
+        working-directory: app/gui
+        run: npm ci
+      - name: Frontend tests
+        working-directory: app/gui
+        run: npm test
+      - name: Frontend build
+        working-directory: app/gui
+        run: npm run build
+      - name: Rust tests
+        run: cargo test --manifest-path app/gui/src-tauri/Cargo.toml
+      - name: Python tests
+        run: python -m unittest discover -s app/tests -v
+

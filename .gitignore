@@ -1,0 +1,24 @@
+# Local build output
+app/gui/node_modules/
+app/gui/dist/
+app/gui/src-tauri/target/
+target/
+
+# Maintainer-only signing material
+private/
+*.key
+*.key.pub
+
+# User and validation output
+results/
+reports/
+updates/
+release/
+*.log
+
+# Platform/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
