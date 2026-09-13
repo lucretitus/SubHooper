@@ -41,7 +41,7 @@
                                ],
                    "createUpdaterArtifacts":  true,
                    "publisher":  "SubHooper",
-                   "copyright":  "Copyright Â© 2026 SubHooper contributors",
+                   "copyright":  "Copyright Ã‚Â© 2026 SubHooper contributors",
                    "category":  "Utility",
                    "shortDescription":  "Extract hardcoded subtitles from video on Windows",
                    "longDescription":  "SubHooper connects VideoSubFinder and RapidVideOCR in a focused desktop workflow.",
@@ -65,7 +65,7 @@
                },
     "plugins":  {
                     "updater":  {
-                                    "pubkey":  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3QzI0NUFDQjA4RDNFMEYKUldRUFBvMndyRVhDcDd6U3hOQVdrK05qT0RDZWhlZHRxSzZ5Qlc2eHpXWkt0ck9rQ1dncFBibnoK",
+                                    "pubkey":  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDN0ZFNTFCNEJFQ0FEMzMKUldRenJleExHK1Yvdk1vZ2pnai9OakExUWRkZlp6ZmQvQzBxU1dUMkdEeEtZUldxQzE1ajlqeVoK",
                                     "endpoints":  [
                                                       "https://github.com/lucretitus/SubHooper/releases/latest/download/latest.json"
                                                   ],
