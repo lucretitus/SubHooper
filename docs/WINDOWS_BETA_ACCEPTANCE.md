@@ -1,4 +1,4 @@
-# Windows beta acceptance — 0.3.6
+# Windows beta acceptance — 0.3.7
 
 Use a clean Windows 10/11 x64 test account without Node.js, Rust, Python,
 VideoSubFinder, RapidVideOCR, or a previous portable SubHooper folder.
@@ -10,6 +10,9 @@ VideoSubFinder, RapidVideOCR, or a previous portable SubHooper folder.
 - [ ] Video extraction requests component setup instead of failing obscurely.
 - [ ] Component setup displays licenses/hosts and requires explicit approval.
 - [ ] VideoSubFinder and OCR runtime both show **Ready** after setup.
+- [ ] Component setup recovers when one SourceForge endpoint returns HTML or a
+      transient redirect response, without accepting a mismatched SHA-256.
+- [ ] Installed extraction can read `C:\Program Files\SubHooper\app\VERSION.txt`.
 - [ ] A short known video completes and its SRT opens in AI Cleaning automatically.
 - [ ] Cancel works during VideoSubFinder, OCR, model download, and local AI.
 - [ ] Qwen3 4B and 8B download, verify, clean, and export separate SRT files.
@@ -23,4 +26,3 @@ VideoSubFinder, RapidVideOCR, or a previous portable SubHooper folder.
 
 Record Windows version, GPU/CPU, installer filename, and any failed item in the
 GitHub pre-release notes. Do not call the beta stable until this checklist passes.
-

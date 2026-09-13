@@ -25,7 +25,7 @@ const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "webm", "ts", "m2ts", "wmv", "m4v",
 ];
 const AI_MAX_SUBTITLE_BYTES: usize = 20 * 1024 * 1024;
-const AI_USER_AGENT: &str = "SubHooper/0.3.6-beta";
+const AI_USER_AGENT: &str = "SubHooper/0.3.7-beta";
 const AI_TARGET_CHUNK_SIZE: usize = 12;
 const AI_CONTEXT_CUES: usize = 4;
 const AI_DOCUMENT_SAMPLE_CUES: usize = 24;
@@ -1294,7 +1294,7 @@ fn persist_ai_diagnostic(
         .ok()?
         .as_millis();
     let content = format!(
-        "SubHooper=0.3.6-beta\nGeneratedUnixMs={timestamp}\nError={error}\nCLI={}\nModel={}\n\n--- OUTPUT FILE ---\n{}\n\n--- STDOUT ---\n{}\n\n--- STDERR ---\n{}\n",
+        "SubHooper=0.3.7-beta\nGeneratedUnixMs={timestamp}\nError={error}\nCLI={}\nModel={}\n\n--- OUTPUT FILE ---\n{}\n\n--- STDOUT ---\n{}\n\n--- STDERR ---\n{}\n",
         cli.display(),
         model_path.display(),
         ai_log_excerpt(output_file),
@@ -2444,10 +2444,10 @@ mod tests {
     fn summary_parser_keeps_windows_paths_with_equals() {
         let lines = vec![
             "noise=value".to_string(),
-            "--- SUBHOOPER PIPELINE 0.3.6 RESULT START ---".to_string(),
+            "--- SUBHOOPER PIPELINE 0.3.7 RESULT START ---".to_string(),
             "Pipeline=COMPLETE".to_string(),
             "SRT=C:\\Video=One\\result.srt".to_string(),
-            "--- SUBHOOPER PIPELINE 0.3.6 RESULT END ---".to_string(),
+            "--- SUBHOOPER PIPELINE 0.3.7 RESULT END ---".to_string(),
         ];
         let result = parse_summary(&lines);
         assert_eq!(result.get("Pipeline").map(String::as_str), Some("COMPLETE"));

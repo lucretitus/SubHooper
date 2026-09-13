@@ -18,31 +18,84 @@ $pythonExe = [System.IO.Path]::Combine($pythonRoot, 'python.exe')
 $runtimePython = [System.IO.Path]::Combine($runtimeRoot, 'Scripts', 'python.exe')
 $probe = [System.IO.Path]::Combine($PSScriptRoot, 'engine', 'probe.py')
 
-$vsfUrl = 'https://sourceforge.net/projects/videosubfinder/files/VideoSubFinder_6.10_x64.zip/download'
+$vsfUrls = @(
+    'https://downloads.sourceforge.net/project/videosubfinder/VideoSubFinder_6.10_x64.zip',
+    'https://sourceforge.net/projects/videosubfinder/files/VideoSubFinder_6.10_x64.zip/download',
+    'https://master.dl.sourceforge.net/project/videosubfinder/VideoSubFinder_6.10_x64.zip?viasf=1'
+)
 $vsfSha256 = '3c0cc03793ec9753a6a4ee8a91c1d226c20b80aab901718f7c97d4fcb3580c0e'
 $pythonUrl = 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.exe'
 $pythonSha256 = '9d9eb2709ef81bf5cd30db3c2096bdbc4ea10087c22e62f27d356b36f6ae9649'
 $vcRuntimeUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 
-function Get-VerifiedDownload {
+function Invoke-ComponentDownload {
     param(
         [Parameter(Mandatory=$true)][string]$Url,
+        [Parameter(Mandatory=$true)][string]$Destination
+    )
+
+    $curl = Get-Command 'curl.exe' -ErrorAction SilentlyContinue
+    if ($null -ne $curl) {
+        $curlArguments = @(
+            '--silent', '--show-error', '--location', '--fail',
+            '--retry', '3', '--retry-delay', '2', '--connect-timeout', '30',
+            '--output', $Destination, $Url
+        )
+        & $curl.Source @curlArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "curl.exe exited with code $LASTEXITCODE."
+        }
+        return
+    }
+
+    Invoke-WebRequest -UseBasicParsing -MaximumRedirection 10 `
+        -Headers @{ 'User-Agent' = 'SubHooper/0.3.7' } `
+        -Uri $Url -OutFile $Destination
+}
+
+function Get-VerifiedDownload {
+    param(
+        [Parameter(Mandatory=$true)][string[]]$Urls,
         [Parameter(Mandatory=$true)][string]$Destination,
         [Parameter(Mandatory=$true)][string]$Sha256,
         [Parameter(Mandatory=$true)][string]$Label
     )
+    $expected = $Sha256.ToLowerInvariant()
     if ([System.IO.File]::Exists($Destination)) {
         $existing = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($existing -eq $Sha256) { return }
+        if ($existing -eq $expected) { return }
         Remove-Item -LiteralPath $Destination -Force
     }
-    Write-Output "Downloading $Label..."
-    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination
-    $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $Sha256) {
-        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
-        throw "$Label failed SHA-256 verification. Expected $Sha256 but received $actual."
+
+    $partial = "$Destination.partial"
+    $lastFailure = 'No download attempt completed.'
+    for ($sourceIndex = 0; $sourceIndex -lt $Urls.Count; $sourceIndex++) {
+        $url = $Urls[$sourceIndex]
+        foreach ($attempt in 1..3) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            Write-Output "Downloading $Label (source $($sourceIndex + 1)/$($Urls.Count), attempt $attempt/3)..."
+            try {
+                Invoke-ComponentDownload -Url $url -Destination $partial
+                if (-not [System.IO.File]::Exists($partial)) {
+                    throw 'The downloader did not create a file.'
+                }
+                $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($actual -eq $expected) {
+                    Move-Item -LiteralPath $partial -Destination $Destination -Force
+                    return
+                }
+                $length = (Get-Item -LiteralPath $partial).Length
+                $lastFailure = "Source returned an unverified file ($length bytes, SHA-256 $actual)."
+            } catch {
+                $lastFailure = $_.Exception.Message
+            } finally {
+                Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 2
+        }
     }
+
+    throw "$Label could not be downloaded and verified after trying all official sources. Expected SHA-256 $expected. Last error: $lastFailure"
 }
 
 function Expand-SafeZip {
@@ -117,7 +170,7 @@ Install-VcRuntime
 
 if (-not [System.IO.File]::Exists($vsfExe)) {
     $vsfArchive = [System.IO.Path]::Combine($downloadRoot, 'VideoSubFinder_6.10_x64.zip')
-    Get-VerifiedDownload -Url $vsfUrl -Destination $vsfArchive -Sha256 $vsfSha256 -Label 'VideoSubFinder 6.10'
+    Get-VerifiedDownload -Urls $vsfUrls -Destination $vsfArchive -Sha256 $vsfSha256 -Label 'VideoSubFinder 6.10'
     Write-Output 'Installing VideoSubFinder 6.10...'
     $vsfStaging = "$vsfRoot.staging"
     if ([System.IO.Directory]::Exists($vsfStaging)) { Remove-Item -LiteralPath $vsfStaging -Recurse -Force }
@@ -132,7 +185,7 @@ if (-not [System.IO.File]::Exists($vsfExe)) {
 if (-not (Test-OcrRuntime)) {
     if (-not [System.IO.File]::Exists($pythonExe)) {
         $pythonInstaller = [System.IO.Path]::Combine($downloadRoot, 'python-3.14.7-amd64.exe')
-        Get-VerifiedDownload -Url $pythonUrl -Destination $pythonInstaller -Sha256 $pythonSha256 -Label 'Python 3.14.7 runtime'
+        Get-VerifiedDownload -Urls @($pythonUrl) -Destination $pythonInstaller -Sha256 $pythonSha256 -Label 'Python 3.14.7 runtime'
         Write-Output 'Installing the private Python runtime...'
         [System.IO.Directory]::CreateDirectory($pythonRoot) | Out-Null
         $arguments = @(

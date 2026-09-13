@@ -5,7 +5,7 @@ video subtitles into editable SRT files through a single, clean interface. It
 automates subtitle-frame extraction, OCR, review, local AI-assisted cleanup,
 optional translation, and export.
 
-> **Beta status:** SubHooper 0.3.6 is an early public beta. Important subtitle
+> **Beta status:** SubHooper 0.3.7 is an early public beta. Important subtitle
 > output should be reviewed before production or screening use.
 
 ## Download
@@ -56,6 +56,10 @@ Video extraction and OCR components are not embedded in the installer. On first
 use, open **Settings > Video extraction components**, review the notice, and
 approve the component installation. SubHooper then prepares its managed runtime
 under `%LOCALAPPDATA%\SubHooper`.
+
+Component archives are accepted only after pinned SHA-256 verification. The
+downloader retries transient responses and uses alternative official sources
+when a mirror returns a redirect page instead of the requested archive.
 
 This process does not require a separate manual installation of VideoSubFinder,
 RapidVideOCR, Python, Node.js, or Rust. AI Cleaning can also be used independently

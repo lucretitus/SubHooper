@@ -5,12 +5,12 @@ describe("pipeline helpers", () => {
   it("parses only the result block and keeps values containing equals", () => {
     const result = parseSummary([
       "noise=ignored",
-      "--- SUBHOOPER PIPELINE 0.3.6 RESULT START ---",
+      "--- SUBHOOPER PIPELINE 0.3.7 RESULT START ---",
       "Pipeline=COMPLETE",
       "SRT=C:\\Video=One\\result.srt",
       "SuspiciousShortCues=0",
       "Error=",
-      "--- SUBHOOPER PIPELINE 0.3.6 RESULT END ---",
+      "--- SUBHOOPER PIPELINE 0.3.7 RESULT END ---",
     ].join("\r\n"));
     expect(result.Pipeline).toBe("COMPLETE");
     expect(result.SRT).toBe("C:\\Video=One\\result.srt");

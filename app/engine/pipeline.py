@@ -24,6 +24,15 @@ def resolve_results_root(project):
     return root
 
 
+def read_package_version(project):
+    version_file = Path(project) / 'VERSION.txt'
+    try:
+        version = version_file.read_text(encoding='ascii').strip()
+    except OSError:
+        version = os.environ.get('SUBHOOPER_VERSION', '').strip()
+    return version or 'unknown'
+
+
 def result_bundle_files(result, destination):
     allowed_suffixes = {'.json', '.log', '.srt', '.txt'}
     return sorted(
@@ -60,7 +69,7 @@ def main():
     args = parser.parse_args()
     project = Path(__file__).resolve().parent.parent
     results_root = resolve_results_root(project)
-    package_version = (project / 'VERSION.txt').read_text(encoding='ascii').strip()
+    package_version = read_package_version(project)
     run_id = datetime.now().strftime('%Y%m%d-%H%M%S-') + uuid.uuid4().hex[:8]
     result = results_root / run_id
     result.mkdir(parents=True, exist_ok=False)

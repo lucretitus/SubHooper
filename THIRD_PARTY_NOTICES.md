@@ -1,6 +1,6 @@
 # Third-party notices
 
-SubHooper 0.3.6 beta does not bundle the following runtime components. The
+SubHooper 0.3.7 beta does not bundle the following runtime components. The
 application downloads them only after explicit approval and stores them outside
 the installed application directory. Each component remains an independent work
 under its own license and terms.

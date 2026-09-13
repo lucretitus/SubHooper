@@ -2,7 +2,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$readyMarker = Join-Path $PSScriptRoot '.gui-ready-v0.3.6'
+$readyMarker = Join-Path $PSScriptRoot '.gui-ready-v0.3.7'
 $homeRoot = Split-Path $PSScriptRoot -Parent
 $reportsRoot = if ($env:SUBTITLE_REPORTS_ROOT) {
     [System.IO.Path]::GetFullPath($env:SUBTITLE_REPORTS_ROOT)

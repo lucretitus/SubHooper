@@ -8,11 +8,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'engine'))
 
 from config import build_vsf_command, get_region_profile, validate_region_offsets
 from ocr_worker import compact_text, detector_format_suspicious, fuse_text, parse_srt, timestamp_from_image
-from pipeline import resolve_results_root
+from pipeline import read_package_version, resolve_results_root
 from runtime import Workspace, cleanup_stale_workspaces, normalize_srt, run_process, select_compute_mode
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_package_version_reads_bundled_metadata(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'VERSION.txt').write_text('0.3.7\n', encoding='ascii')
+            self.assertEqual(read_package_version(root), '0.3.7')
+
+    def test_package_version_has_safe_missing_file_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.dict('os.environ', {}, clear=True):
+                self.assertEqual(read_package_version(Path(folder)), 'unknown')
+
     def test_results_root_can_live_outside_application(self):
         with tempfile.TemporaryDirectory() as folder:
             configured = Path(folder) / 'results'
