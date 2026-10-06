@@ -1,164 +1,109 @@
-# SubHooper
+<p align="center">
+  <img src="docs/images/subhooper-logo.png" alt="SubHooper" width="280">
+</p>
 
-SubHooper is an open-source Windows desktop application that turns hardcoded
-video subtitles into editable SRT files through a single, clean interface. It
-automates subtitle-frame extraction, OCR, review, local AI-assisted cleanup,
-optional translation, and export.
+<p align="center">
+  <strong>An open-source Windows app for extracting, cleaning, and translating hardcoded subtitles.</strong><br>
+  Select the subtitle area, extract the text, and save it.<br>
+  Optional AI cleanup and translation. Video and subtitle processing stays on the computer.
+</p>
 
-> **Beta status:** SubHooper 0.3.7 is an early public beta. Important subtitle
-> output should be reviewed before production or screening use.
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Windows">
+  <img src="https://img.shields.io/badge/backend-Rust-CE422B?logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/OCR-Python-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/UI-React-149ECA?logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/license-MIT-2EA44F" alt="MIT">
+  <img src="https://img.shields.io/badge/processing-local-6E40C9" alt="Local processing">
+</p>
 
-## Download
+<p align="center">
+  <a href="https://github.com/lucretitus/SubHooper/releases/latest">Download for Windows</a> ·
+  <a href="CHANGELOG.md">Release notes</a> ·
+  <a href="https://github.com/lucretitus/SubHooper/issues">Report an issue</a>
+</p>
 
-### [Download the latest Windows installer](https://github.com/lucretitus/SubHooper/releases/latest)
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/subtitle-extraction.png" alt="SubHooper interface" width="100%"></td>
+    <td width="50%"><img src="docs/images/subtitle-tools.png" alt="SubHooper interface" width="100%"></td>
+  </tr>
+</table>
 
-Open the latest release and download the Windows setup file ending in
-`_x64-setup.exe`. The source-code archives generated automatically by GitHub are
-not the application installer.
+[Features](#features) · [Get started](#get-started) · [Requirements](#requirements) · [Privacy](#privacy) · [Development](#development)
 
-SubHooper installs under `C:\Program Files\SubHooper` and creates a normal
-Windows application entry. Node.js, Rust, a separate Python installation, and a
-copy of the source repository are not required for normal use.
+<table>
+  <tr>
+    <td width="50%">
+      <h3>Extract from video</h3>
+      <p>Choose the subtitle area in the video preview. Local OCR turns hardcoded subtitles into an editable subtitle file.</p>
+    </td>
+    <td width="50%">
+      <h3>Use the available hardware</h3>
+      <p>Run on CPU or GPU + CPU with NVIDIA CUDA. Experimental DirectML support is available for compatible AMD and Intel graphics.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>Clean and translate locally</h3>
+      <p>Use optional Qwen3 models to correct OCR errors or translate subtitles. Pick Light, Balanced, or Strong cleanup.</p>
+    </td>
+    <td width="50%">
+      <h3>Keep the original</h3>
+      <p>Compare the original text with the AI output and export either result as SRT, TTML, plain text, or Markdown.</p>
+    </td>
+  </tr>
+</table>
 
-Windows may display a SmartScreen warning because the beta installer does not
-currently carry a commercial Authenticode certificate. The release updater uses
-its own cryptographic signature, but that signature does not replace Windows
-publisher signing.
+## Features
 
-## What SubHooper does
+### Choose what to extract
 
-- Extracts hardcoded subtitle frames from video.
-- Runs OCR and produces an editable SRT file.
-- Preserves the original OCR result for comparison.
-- Supports CPU and compatible NVIDIA GPU processing with fallback behavior.
-- Imports an existing SRT directly into the AI Cleaning workspace.
-- Offers multiple cleanup strengths for conservative or stronger subtitle
-  repair.
-- Uses optional local Qwen3 models for subtitle cleaning without uploading the
-  video or SRT.
-- Offers optional DeepL translation using a personal DeepL API account.
-- Exports cleaned or translated SRT files while keeping reports and results
-  between application updates.
+Open a video, preview it, and select a preset or custom subtitle region. Source videos are read directly; generated temporary files are cleaned after processing.
 
-## Typical workflow
+### Review before saving
 
-1. Open a video in SubHooper.
-2. Select the subtitle area and processing options.
-3. Start extraction and OCR.
-4. Review the original SRT in the AI Cleaning panel.
-5. Optionally clean the subtitles with a local Qwen3 model.
-6. Optionally translate either the original or cleaned result.
-7. Export the selected SRT.
+Keep the original extraction available alongside the AI result. Cleanup and translation are optional, and exporting the original never requires an AI model.
 
-## First-run components
+### Bring existing subtitles
 
-Video extraction and OCR components are not embedded in the installer. On first
-use, open **Settings > Video extraction components**, review the notice, and
-approve the component installation. SubHooper then prepares its managed runtime
-under `%LOCALAPPDATA%\SubHooper`.
+Open an SRT file and use the AI tools without installing the video extraction components. Translate the original subtitles or a cleaned result.
 
-Component archives are accepted only after pinned SHA-256 verification. The
-downloader retries transient responses and uses alternative official sources
-when a mirror returns a redirect page instead of the requested archive.
+### Pick a local model
 
-This process does not require a separate manual installation of VideoSubFinder,
-RapidVideOCR, Python, Node.js, or Rust. AI Cleaning can also be used independently
-by importing an existing SRT without installing the video-extraction components.
+Choose Qwen3 4B, 8B, or 14B according to the available memory. Models download when explicitly starting an AI action; matching GGUF files can also be imported. Local AI runs on CPU or a supported NVIDIA GPU.
 
-## Core projects
+## Get started
 
-SubHooper provides the unified interface, workflow automation, component
-management, result review, AI cleanup, translation controls, and export layer.
-Its core subtitle-extraction pipeline works in the background with:
+1. [Download the Windows installer](https://github.com/lucretitus/SubHooper/releases/latest) and install SubHooper.
+2. Open a video and select the subtitle area.
+3. Install the extraction components from Settings when prompted, then extract.
+4. Review the result. Optionally clean or translate it, then export the original or AI result.
 
-- [VideoSubFinder](https://github.com/SWHL/VideoSubFinder) for detecting and
-  extracting hardcoded subtitle frames.
-- [RapidVideOCR](https://github.com/SWHL/RapidVideOCR) for converting extracted
-  subtitle images into timed subtitle text.
+After upgrading, use **Settings > Video Extraction Components > Verify Components** if GPU + CPU needs verification. CPU and GPU runtime status are checked separately.
 
-VideoSubFinder and RapidVideOCR are independent third-party projects maintained
-by their respective authors. They are downloaded only after explicit approval
-and retain their own licenses. They are not presented as part of the SubHooper
-source code. Additional component and license information is available in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+## Requirements
 
-## AI cleaning
+| Component | Support |
+| --- | --- |
+| Operating system | Windows x64 |
+| CPU OCR | Available without a supported GPU |
+| NVIDIA GPU OCR | CUDA; tested on GTX 1660 SUPER and RTX 4070 |
+| AMD / Intel GPU OCR | Experimental DirectML on DirectX 12-capable graphics, including integrated GPUs |
+| Local AI | CPU or a supported NVIDIA CUDA GPU; model choice depends on available memory |
 
-Local AI cleaning is optional. Qwen3 models run through a locally managed
-`llama.cpp` runtime. Qwen3 8B is the recommended quality option for systems with
-enough memory; smaller models remain available for lower-resource computers.
+GPU + CPU OCR prefers NVIDIA CUDA. DirectML validates model execution on a hardware adapter before processing. AMD/Intel throughput and output quality have not been measured; integrated graphics may be slower than CPU. Explicit GPU errors stop processing instead of silently switching to CPU.
 
-Cleanup strength controls how aggressively OCR noise, unrelated symbols,
-foreign-language fragments, broken lines, and obvious recognition errors are
-handled. AI output is not guaranteed to be correct and should remain subject to
-human review.
+## Privacy
 
-## Translation
+Video, OCR, cleanup, and translation run locally. Internet access is needed for component and model downloads and update checks. Downloaded components and saved results are kept in LocalAppData.
 
-DeepL translation is optional and requires a personal DeepL API key, including
-for DeepL API Free. SubHooper does not provide a shared key, create subscriptions,
-or change account spending limits.
+OCR and AI output can contain mistakes. Review subtitle text and timing before use.
 
-Before an online translation starts, the application identifies that subtitle
-text will be sent to an external service. When both versions are available, the
-original or AI-cleaned SRT can be selected as the translation source.
+## Development
 
-## Privacy and network use
-
-- Video files and extracted frames remain on the computer.
-- OCR processing and local Qwen3 cleaning remain on the computer.
-- Component downloads occur only after approval and contact the relevant
-  official distribution services.
-- Local AI model installation downloads the selected model and `llama.cpp`.
-- DeepL is the only built-in online translation provider. When selected, the
-  subtitle text and limited context required for translation are sent to DeepL.
-- Update checks contact this repository's GitHub Releases endpoint.
-
-SubHooper does not include analytics, advertising, or a SubHooper-operated cloud
-service.
-
-## Files and updates
-
-Application data is stored under:
-
-```text
-%LOCALAPPDATA%\SubHooper
-```
-
-This location contains managed components, AI models, reports, results, and
-working data. Installing an application update does not intentionally remove
-these files.
-
-New versions are distributed through GitHub Releases. The application can check
-for a signed update from **Settings > Check for updates**.
-
-## System support
-
-- 64-bit Windows
-- Windows 11 is the currently tested platform
-- Internet access for first-run component downloads, model downloads, optional
-  DeepL translation, and update checks
-- An NVIDIA GPU is optional; supported work can fall back to CPU processing
-- Local Qwen3 model requirements vary according to model size
-
-## Source code and contributions
-
-The source code is available in this repository for transparency, auditing, bug
-reports, and continued development. Normal users should install SubHooper from
-the latest GitHub Release rather than building the application from source.
-
-Technical contribution notes are kept separately in
-[CONTRIBUTING.md](CONTRIBUTING.md) so that the main page remains focused on
-installation and use.
-
-## Development credit
-
-SubHooper was developed with assistance from OpenAI Codex running GPT-5.6 Sol
-during the beta development process. Generated and modified code remains subject
-to the project's testing, review, and licensing requirements.
+Built with Tauri, Rust, React, and a local Python / ONNX OCR engine. See [CONTRIBUTING.md](CONTRIBUTING.md) for source setup, checks, and releases, and [SECURITY.md](SECURITY.md) for security reporting.
 
 ## License
 
-SubHooper source code is licensed under the [MIT License](LICENSE). Downloaded
-third-party components retain their own licenses and terms; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE). Downloaded components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

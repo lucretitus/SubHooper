@@ -1,28 +1,28 @@
-import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import { PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
-import { aiInputForMode, AiMode, AiTranslateSource, basename, estimateSrtTextCharacters, ExportFormat, IDLE_STAGE, isSupportedVideo, outputFilename, pipelineAiHandoff, PipelineStage, resultQuality, Summary } from "./pipeline";
+import { aiInputForMode, AiMode, AiTranslateSource, basename, componentProgressPercent, containedVideoFrame, ExportFormat, IDLE_STAGE, isPipelineCancellation, isSupportedVideo, NormalizedRect, originalSrtExport, outputFilename, pipelineAiHandoff, PipelineStage, regionBoxInFrame, RegionBox, RegionDragMode, Summary, updateRegionBox } from "./pipeline";
 
 type RegionPreset = "Bottom" | "Top" | "Full" | "Custom";
-type RegionBox = { x: number; y: number; w: number; h: number };
-type DragMode = "move" | "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+type DragMode = RegionDragMode;
 type PipelineResult = { summary: Summary; srtText: string; srtPath: string; resultDir: string };
 type Settings = { defaultDirectory: string; defaultFormat: ExportFormat };
-type AiModel = { id: string; name: string; sizeLabel: string; memoryLabel: string; recommendation: string; installed: boolean };
+type AiModel = { id: string; name: string; sizeLabel: string; memoryLabel: string; recommendation: string; minimumGpuMib: number; installed: boolean; modelCached?: boolean; gpuEligible: boolean; gpuReason: string };
 type AiProgress = { phase: string; label: string; received: number; total: number | null };
 type AiResult = { srtText: string; modelName: string; cueCount: number; sourceCueCount: number; droppedCueCount: number };
-type AiProvider = "local" | "deepl";
-type DeepLPlan = "free" | "pro";
+type AiComputeBackend = "cuda" | "cpu";
+type OcrComputeMode = "mixed" | "cpu";
 type AiCleanupStrength = "light" | "balanced" | "strong";
-type ComponentStatus = { videoSubFinder: boolean; ocrRuntime: boolean; ready: boolean; installRoot: string };
+type ComponentStatus = { ocrRuntime: boolean; gpuRuntime: boolean; gpuError: string | null; ready: boolean; installRoot: string };
 type AvailableUpdate = Awaited<ReturnType<typeof check>>;
 
 const VIDEO_FILTER = [{ name: "Video files", extensions: ["mp4", "mkv", "avi", "mov", "webm", "ts", "m2ts", "wmv", "m4v"] }];
 const SUBTITLE_FILTER = [{ name: "SRT subtitles", extensions: ["srt"] }];
+const AI_MODEL_FILTER = [{ name: "GGUF models", extensions: ["gguf"] }];
 const PRESETS: Record<Exclude<RegionPreset, "Custom">, RegionBox> = {
   Bottom: { x: .03, y: .58, w: .94, h: .40 },
   Top: { x: .03, y: .02, w: .94, h: .40 },
@@ -34,7 +34,8 @@ const PRESET_LABELS: Record<Exclude<RegionPreset, "Custom">, string> = {
   Full: "Fullscreen",
 };
 const FORMAT_LABELS: Record<ExportFormat, string> = { srt: "SRT", ttml: "TTML", txt: "TXT", md: "MD" };
-const STEP_LABELS = ["Insert", "Subtitle", "Process", "AI Cleaning"];
+const STEP_LABELS = ["Insert", "Subtitles", "Results"];
+const QWEN_MODEL_ORDER = ["qwen3-4b-q4km", "qwen3-8b-q4km", "qwen3-14b-q4km"];
 const AI_LANGUAGES = ["English", "Turkish", "German", "French", "Spanish", "Italian", "Portuguese", "Arabic", "Japanese", "Korean", "Chinese"];
 const CLEANUP_STRENGTH_LABELS: Record<AiCleanupStrength, string> = { light: "Light", balanced: "Balanced", strong: "Strong" };
 const CLEANUP_STRENGTH_HELP: Record<AiCleanupStrength, string> = {
@@ -42,10 +43,6 @@ const CLEANUP_STRENGTH_HELP: Record<AiCleanupStrength, string> = {
   balanced: "Normalize the language and remove only clear OCR noise.",
   strong: "Aggressively remove symbol clusters, broken fragments, and unrelated text.",
 };
-const STAGE_PROGRESS: Record<PipelineStage["key"], [number, number]> = {
-  idle: [0, 0], prepare: [4, 12], vsf: [14, 68], ocr: [70, 91], finalize: [94, 98], complete: [100, 100], cancelled: [0, 0], failed: [0, 0],
-};
-
 type IconName = "video" | "folder" | "cpu" | "gpu" | "spark" | "download" | "settings" | "check" | "chevron" | "edit";
 
 function Icon({ name }: { name: IconName }) {
@@ -64,24 +61,12 @@ function Icon({ name }: { name: IconName }) {
   return <svg className={`icon-${name}`} viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
 
-function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
-
-export function updateRegionBox(initial: RegionBox, mode: DragMode, dx: number, dy: number): RegionBox {
-  const min = .08;
-  if (mode === "move") return { ...initial, x: clamp(initial.x + dx, 0, 1 - initial.w), y: clamp(initial.y + dy, 0, 1 - initial.h) };
-  let left = initial.x;
-  let top = initial.y;
-  let right = initial.x + initial.w;
-  let bottom = initial.y + initial.h;
-  if (mode.includes("w")) left = clamp(initial.x + dx, 0, right - min);
-  if (mode.includes("e")) right = clamp(initial.x + initial.w + dx, left + min, 1);
-  if (mode.includes("n")) top = clamp(initial.y + dy, 0, bottom - min);
-  if (mode.includes("s")) bottom = clamp(initial.y + initial.h + dy, top + min, 1);
-  return { x: left, y: top, w: right - left, h: bottom - top };
-}
-
 function joinPath(directory: string, filename: string) { return directory ? directory.replace(/[\\\/]$/, "") + "\\" + filename : filename; }
 function secondsLabel(seconds: number) { return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`; }
+export function defaultOcrComputeMode(recommendedMode: string | undefined): OcrComputeMode {
+  // A previous GUI recommendation/selection may still say "cuda".
+  return recommendedMode === "mixed" || recommendedMode === "cuda" ? "mixed" : "cpu";
+}
 
 export default function App() {
   const [videoPath, setVideoPath] = useState("");
@@ -89,24 +74,24 @@ export default function App() {
   const [activeStep, setActiveStep] = useState(0);
   const [preset, setPreset] = useState<RegionPreset>("Bottom");
   const [regionBox, setRegionBox] = useState<RegionBox>(PRESETS.Bottom);
-  const [cpuOnly, setCpuOnly] = useState(false);
+  const [videoFrame, setVideoFrame] = useState<NormalizedRect>({ x: 0, y: 0, w: 1, h: 1 });
+  const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 });
+  const [ocrComputeMode, setOcrComputeMode] = useState<OcrComputeMode>("cpu");
+  const [ocrRecommendedMode, setOcrRecommendedMode] = useState<OcrComputeMode>("cpu");
   const [busy, setBusy] = useState(false);
   const [draggingFile, setDraggingFile] = useState(false);
   const [dragState, setDragState] = useState<{ mode: DragMode; x: number; y: number; box: RegionBox; width: number; height: number } | null>(null);
   const [stage, setStage] = useState<PipelineStage>(IDLE_STAGE);
-  const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
   const [result, setResult] = useState<PipelineResult | null>(null);
-  const [srtDraft, setSrtDraft] = useState("");
   const [error, setError] = useState("");
-  const [savedPath, setSavedPath] = useState("");
-  const [format, setFormat] = useState<ExportFormat>(() => (localStorage.getItem("defaultFormat") as ExportFormat) || "srt");
   const [settings, setSettings] = useState<Settings>(() => ({ defaultDirectory: localStorage.getItem("defaultDirectory") || "", defaultFormat: (localStorage.getItem("defaultFormat") as ExportFormat) || "srt" }));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [componentStatus, setComponentStatus] = useState<ComponentStatus | null>(null);
   const [componentConsent, setComponentConsent] = useState(false);
   const [componentBusy, setComponentBusy] = useState(false);
   const [componentError, setComponentError] = useState("");
+  const [componentProgressMessage, setComponentProgressMessage] = useState("");
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("Not checked");
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>(null);
@@ -116,26 +101,20 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   const [aiModelId, setAiModelId] = useState("qwen3-8b-q4km");
-  const [aiProvider, setAiProvider] = useState<AiProvider>("local");
-  const [aiGuidance, setAiGuidance] = useState("");
-  const [deeplApiKey, setDeeplApiKey] = useState("");
-  const [deeplPlan, setDeeplPlan] = useState<DeepLPlan>("free");
-  const [deeplSettingsOpen, setDeeplSettingsOpen] = useState(false);
-  const [allowBilledDeepl, setAllowBilledDeepl] = useState(false);
-  const [onlineConsent, setOnlineConsent] = useState(false);
-  const [onlineWarningOpen, setOnlineWarningOpen] = useState(false);
+  const [aiComputeBackend, setAiComputeBackend] = useState<AiComputeBackend>("cuda");
+  const [aiComputeBackendReady, setAiComputeBackendReady] = useState(false);
   const [aiSource, setAiSource] = useState("");
   const [aiSourceName, setAiSourceName] = useState("");
   const [aiOutput, setAiOutput] = useState("");
   const [aiCleanedSource, setAiCleanedSource] = useState("");
   const [aiMode, setAiMode] = useState<AiMode>("clean");
   const [aiTranslateSource, setAiTranslateSource] = useState<AiTranslateSource>("original");
-  const [aiCleanupLanguage, setAiCleanupLanguage] = useState("Auto detect");
   const [aiCleanupStrength, setAiCleanupStrength] = useState<AiCleanupStrength>("balanced");
-  const [aiSourceLanguage, setAiSourceLanguage] = useState("Auto detect");
   const [aiLanguage, setAiLanguage] = useState("English");
   const [aiFormat, setAiFormat] = useState<ExportFormat>("srt");
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiCancelling, setAiCancelling] = useState(false);
+  const aiCancellationRef = useRef(false);
   const [aiProgress, setAiProgress] = useState<AiProgress | null>(null);
   const [aiError, setAiError] = useState("");
   const [aiSavedPath, setAiSavedPath] = useState("");
@@ -146,7 +125,6 @@ export default function App() {
   const [aiResultStrength, setAiResultStrength] = useState<AiCleanupStrength | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const deeplShelfRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -174,10 +152,43 @@ export default function App() {
       .then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; })
       .catch((reason) => setAiError(String(reason)));
     invoke<AiModel[]>("ai_catalog")
-      .then((models) => { if (!disposed) setAiModels(models); })
+      .then((models) => { if (!disposed) {
+        const ordered = [...models].sort((left, right) => QWEN_MODEL_ORDER.indexOf(left.id) - QWEN_MODEL_ORDER.indexOf(right.id));
+        setAiModels(ordered);
+        const recommended = [...ordered].reverse().find((model) => model.gpuEligible) || ordered[0];
+        setAiModelId(recommended?.id || QWEN_MODEL_ORDER[1]);
+      } })
       .catch((reason) => { if (!disposed) setAiError(String(reason)); });
     invoke<ComponentStatus>("component_status")
       .then((status) => { if (!disposed) setComponentStatus(status); })
+      .catch((reason) => { if (!disposed) setComponentError(String(reason)); });
+    invoke<{ recommendedMode: string; reason: string }>("ocr_hardware_recommendation")
+      .then((recommendation) => { if (!disposed) { const mode = defaultOcrComputeMode(recommendation.recommendedMode); setOcrComputeMode(mode); setOcrRecommendedMode(mode); } })
+      .catch(() => { if (!disposed) { setOcrComputeMode("cpu"); setOcrRecommendedMode("cpu"); } });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    const update = () => {
+      setVideoFrame(containedVideoFrame(preview.clientWidth, preview.clientHeight,
+        videoDimensions.width, videoDimensions.height));
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(preview);
+    update();
+    return () => observer.disconnect();
+  }, [previewUrl, videoDimensions]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<string>("component-progress", ({ payload }) => {
+      const message = payload.trim();
+      if (message) setComponentProgressMessage(message);
+    })
+      .then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; })
       .catch((reason) => { if (!disposed) setComponentError(String(reason)); });
     return () => { disposed = true; unlisten?.(); };
   }, []);
@@ -191,23 +202,6 @@ export default function App() {
   }, [busy]);
 
   useEffect(() => {
-    if (!deeplSettingsOpen || aiProvider !== "deepl" || aiMode !== "translate") return;
-    const frame = window.requestAnimationFrame(() => deeplShelfRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
-    return () => window.cancelAnimationFrame(frame);
-  }, [deeplSettingsOpen, aiProvider, aiMode]);
-
-  useEffect(() => {
-    if (!busy) {
-      if (stage.key === "complete") setProgress(100);
-      return;
-    }
-    const [floor, ceiling] = STAGE_PROGRESS[stage.key];
-    setProgress((value) => Math.max(value, floor));
-    const timer = window.setInterval(() => setProgress((value) => value < ceiling ? value + 1 : value), 1400);
-    return () => window.clearInterval(timer);
-  }, [busy, stage.key]);
-
-  useEffect(() => {
     if (!dragState) return;
     const move = (event: PointerEvent) => {
       setRegionBox(updateRegionBox(dragState.box, dragState.mode, (event.clientX - dragState.x) / dragState.width, (event.clientY - dragState.y) / dragState.height));
@@ -219,15 +213,17 @@ export default function App() {
     return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); };
   }, [dragState]);
 
-  const quality = useMemo(() => result ? resultQuality(result.summary) : null, [result]);
-  const currentLog = logs.at(-1) || stage.label;
-  const summary = result?.summary ?? {};
+  const lastLog = logs.at(-1) || "";
+  const currentLog = /^OCRProgress=\d+$/i.test(lastLog) ? stage.label : lastLog || stage.label;
+  const displayedRegion = regionBoxInFrame(regionBox, videoFrame);
 
   function selectVideo(path: string) {
     if (!isSupportedVideo(path)) { setError("Select a supported video file."); return; }
     setVideoPath(path);
     setPreviewUrl(convertFileSrc(path));
-    setDuration(0); setCurrentTime(0); setPlaying(false); setResult(null); setSrtDraft(""); setError(""); setSavedPath(""); setLogs([]); setStage(IDLE_STAGE); setProgress(0);
+    setVideoFrame({ x: 0, y: 0, w: 1, h: 1 });
+    setVideoDimensions({ width: 0, height: 0 });
+    setDuration(0); setCurrentTime(0); setPlaying(false); setResult(null); setError(""); setLogs([]); setStage(IDLE_STAGE);
   }
 
   async function chooseVideo() {
@@ -240,8 +236,9 @@ export default function App() {
   function beginRegionDrag(event: ReactPointerEvent, mode: DragMode) {
     if (busy || !previewRef.current) return;
     event.preventDefault(); event.stopPropagation();
-    const bounds = previewRef.current.getBoundingClientRect();
-    setDragState({ mode, x: event.clientX, y: event.clientY, box: regionBox, width: bounds.width, height: bounds.height });
+    const bounds = previewRef.current;
+    setDragState({ mode, x: event.clientX, y: event.clientY, box: regionBox,
+      width: bounds.clientWidth * videoFrame.w, height: bounds.clientHeight * videoFrame.h });
   }
 
   async function togglePreview() {
@@ -262,30 +259,36 @@ export default function App() {
         setSettingsOpen(true);
         return;
       }
+      if (ocrComputeMode === "mixed" && !status.gpuRuntime) {
+        setComponentError(`GPU + CPU components need verification. Select Verify Components, then retry. ${status.gpuError || ""}`);
+        setSettingsOpen(true);
+        return;
+      }
     } catch (reason) {
       setComponentError(String(reason));
       setSettingsOpen(true);
       return;
     }
-    setBusy(true); setResult(null); setSrtDraft(""); setError(""); setSavedPath(""); setLogs([]); setProgress(4); setStage({ key: "prepare", label: "Preparing video", percent: null });
+    await releaseAiRuntime();
+    setBusy(true); setResult(null); setError(""); setLogs([]); setStage({ key: "prepare", label: "Preparing video", percent: null });
     const namedRegion = preset === "Top" || preset === "Custom" ? "Custom" : preset;
     try {
       const response = await invoke<PipelineResult>("start_pipeline", { request: {
         videoPath, region: namedRegion, regionTop: 1 - regionBox.y, regionBottom: 1 - regionBox.y - regionBox.h, regionLeft: regionBox.x, regionRight: regionBox.x + regionBox.w,
-        compute: cpuOnly ? "CPU" : "Auto", ocrCompute: cpuOnly ? "CPU" : "Auto",
+        compute: ocrComputeMode === "cpu" ? "cpu" : "auto", ocrCompute: ocrComputeMode,
       } });
       const aiHandoff = pipelineAiHandoff(response.srtText, response.srtPath, videoPath);
-      setResult(response); setSrtDraft(response.srtText); setProgress(100); setStage({ key: "complete", label: "Subtitles ready", percent: 100 });
-      setAiSource(aiHandoff.content); setAiSourceName(aiHandoff.name); setAiOutput(""); setAiCleanedSource(""); setAiTranslateSource("original"); setAiResultMeta(null); setAiResultMode(null); setAiResultLanguage(""); setAiResultSource(null); setAiResultStrength(null); setAiError(""); setAiSavedPath(""); setAiMode("clean"); setAiProvider("local"); setActiveStep(3);
+      setResult(response); setStage({ key: "complete", label: "Subtitles ready", percent: 100 });
+      setAiSource(aiHandoff.content); setAiSourceName(aiHandoff.name); setAiOutput(""); setAiCleanedSource(""); setAiTranslateSource("original"); setAiResultMeta(null); setAiResultMode(null); setAiResultLanguage(""); setAiResultSource(null); setAiResultStrength(null); setAiError(""); setAiSavedPath(""); setAiMode("clean"); setActiveStep(2);
     } catch (reason) {
       const message = String(reason);
-      if (!message.toLowerCase().includes("cancel")) { setError(message); setStage({ key: "failed", label: "Processing failed", percent: null }); }
+      if (!isPipelineCancellation(reason)) { setError(message); setStage({ key: "failed", label: "Processing failed", percent: null }); }
     } finally { setBusy(false); }
   }
 
   async function cancel() {
     if (!busy) return;
-    try { await invoke("cancel_pipeline"); setStage({ key: "cancelled", label: "Processing cancelled", percent: null }); setProgress(0); } catch (reason) { setError(String(reason)); }
+    try { await invoke("cancel_pipeline"); setStage({ key: "cancelled", label: "Processing cancelled", percent: null }); } catch (reason) { setError(String(reason)); }
   }
 
   async function chooseDefaultDirectory() {
@@ -294,16 +297,21 @@ export default function App() {
   }
 
   function storeSettings() {
-    localStorage.setItem("defaultDirectory", settings.defaultDirectory); localStorage.setItem("defaultFormat", settings.defaultFormat); setFormat(settings.defaultFormat); setSettingsOpen(false);
+    localStorage.setItem("defaultDirectory", settings.defaultDirectory); localStorage.setItem("defaultFormat", settings.defaultFormat); setSettingsOpen(false);
   }
 
   async function installRequiredComponents() {
     if (!componentConsent || componentBusy) return;
-    setComponentBusy(true); setComponentError("");
+    setComponentBusy(true); setComponentError(""); setComponentProgressMessage("Preparing Python 3.13 runtime, OCR packages, and verified PP-OCRv6 models…");
     try {
-      setComponentStatus(await invoke<ComponentStatus>("install_components"));
+      const status = await invoke<ComponentStatus>("install_components");
+      setComponentStatus(status);
+      if (ocrComputeMode === "mixed" && !status.gpuRuntime) {
+        setComponentError(`CPU components are ready, but GPU + CPU validation failed. ${status.gpuError || ""}`);
+      }
     } catch (reason) {
       setComponentError(String(reason));
+      setComponentProgressMessage("Component setup stopped. See the error details below.");
     } finally {
       setComponentBusy(false);
     }
@@ -335,21 +343,6 @@ export default function App() {
     }
   }
 
-  async function exportResult() {
-    if (!result) return;
-    const selected = await save({ defaultPath: joinPath(settings.defaultDirectory, outputFilename(videoPath, format)), filters: [{ name: FORMAT_LABELS[format], extensions: [format] }] });
-    if (!selected) return;
-    const destination = selected.toLowerCase().endsWith(`.${format}`) ? selected : `${selected}.${format}`;
-    try { setSavedPath(await invoke<string>("save_export", { destination, content: srtDraft, format })); setError(""); } catch (reason) { setError(String(reason)); }
-  }
-
-  function openAiFromResult() {
-    if (!srtDraft) return;
-    setAiSource(srtDraft);
-    setAiSourceName(outputFilename(videoPath, "srt"));
-    setAiOutput(""); setAiCleanedSource(""); setAiTranslateSource("original"); setAiResultMeta(null); setAiResultMode(null); setAiResultLanguage(""); setAiResultSource(null); setAiResultStrength(null); setAiError(""); setAiSavedPath(""); setActiveStep(3);
-  }
-
   async function chooseAiSubtitle() {
     const selected = await open({ multiple: false, directory: false, filters: SUBTITLE_FILTER });
     if (typeof selected !== "string") return;
@@ -359,29 +352,66 @@ export default function App() {
     } catch (reason) { setAiError(String(reason)); }
   }
 
-  async function downloadAiModel(modelId: string) {
-    if (aiBusy) return;
-    setAiBusy(true); setAiProvider("local"); setAiModelId(modelId); setAiError(""); setAiProgress({ phase: "starting", label: "Preparing secure download", received: 0, total: null });
-    try {
-      const installed = await invoke<AiModel>("download_ai_model", { modelId });
-      setAiModels((models) => models.map((model) => model.id === installed.id ? installed : model));
-    } catch (reason) { setAiError(String(reason)); }
-    finally { setAiBusy(false); }
+  async function releaseAiRuntime() {
+    await invoke("release_ai_runtime");
+    setAiComputeBackendReady(false);
   }
 
-  async function runAiProcessing() {
-    if (!aiSource || aiBusy) return;
+  async function importAiModel(modelId: string) {
+    const selected = await open({ multiple: false, directory: false, filters: AI_MODEL_FILTER });
+    if (typeof selected !== "string") return;
+    try {
+      await releaseAiRuntime();
+      await invoke("import_ai_model", { modelId, path: selected });
+      const models = await invoke<AiModel[]>("ai_catalog");
+      const ordered = [...models].sort((left, right) => QWEN_MODEL_ORDER.indexOf(left.id) - QWEN_MODEL_ORDER.indexOf(right.id));
+      setAiModels(ordered);
+      setAiModelId(modelId);
+      setAiError("");
+    } catch (reason) { setAiError(String(reason)); }
+  }
+
+  async function selectAiModel(modelId: string) {
+    if (modelId === aiModelId) return;
+    await releaseAiRuntime();
+    setAiModelId(modelId);
+  }
+
+  async function selectAiBackend(backend: AiComputeBackend) {
+    if (backend === aiComputeBackend) return;
+    await releaseAiRuntime();
+    setAiComputeBackend(backend);
+    setAiComputeBackendReady(false);
+    setAiError("");
+    const recommended = [...aiModels].reverse().find((model) => backend === "cpu" || model.gpuEligible);
+    if (recommended) setAiModelId(recommended.id);
+  }
+
+  async function downloadAiModel(modelId: string, continueWithProcessing = false) {
+    if (aiBusy) return;
+    aiCancellationRef.current = false;
+    setAiBusy(true); setAiCancelling(false); setAiModelId(modelId); setAiError(""); setAiProgress({ phase: "starting", label: `Preparing ${aiComputeBackend === "cuda" ? "GPU (CUDA)" : "CPU"} engine`, received: 0, total: null });
+    try {
+      const installed = await invoke<AiModel>("download_ai_model", { modelId, computeBackend: aiComputeBackend });
+      if (aiCancellationRef.current) throw "AI processing was cancelled.";
+      setAiModels((models) => models.map((model) => model.id === installed.id ? installed : model));
+      setAiComputeBackendReady(true);
+      if (continueWithProcessing) await runAiProcessing(true);
+    } catch (reason) { setAiError(String(reason)); setAiProgress(null); }
+    finally { setAiBusy(false); setAiCancelling(false); }
+  }
+
+  async function runAiProcessing(afterPreparation = false) {
+    if (!aiSource || aiBusy && !afterPreparation) return;
+    if (afterPreparation && aiCancellationRef.current) return;
+    if (!afterPreparation) aiCancellationRef.current = false;
     const input = aiInputForMode(aiSource, aiCleanedSource, aiMode, aiTranslateSource);
-    setAiBusy(true); setAiSavedPath(""); setAiError("");
-    setAiProgress({ phase: "starting", label: aiProvider === "deepl" ? "Preparing online translation" : "Starting local AI", received: 0, total: null });
+    setAiBusy(true); setAiCancelling(false); setAiSavedPath(""); setAiError("");
+    setAiProgress({ phase: "starting", label: "Starting local AI", received: 0, total: null });
     try {
       const response = await invoke<AiResult>("run_ai_cleaning", { request: {
-        content: input, modelId: aiModelId, mode: aiMode, cleanupLanguage: aiMode === "clean" ? aiCleanupLanguage : null, cleanupStrength: aiMode === "clean" ? aiCleanupStrength : null, sourceLanguage: aiMode === "translate" ? aiSourceLanguage : null, targetLanguage: aiMode === "translate" ? aiLanguage : null,
-        guidance: aiMode === "translate" ? aiGuidance : null,
-        provider: aiProvider,
-        deeplApiKey: aiProvider === "deepl" ? deeplApiKey : null,
-        deeplPlan: aiProvider === "deepl" ? deeplPlan : null,
-        allowBilledDeepl: aiProvider === "deepl" && deeplPlan === "pro" && allowBilledDeepl,
+        content: input, modelId: aiModelId, computeBackend: aiComputeBackend, mode: aiMode, cleanupLanguage: aiMode === "clean" ? "Auto detect" : null, cleanupStrength: aiMode === "clean" ? aiCleanupStrength : null, sourceLanguage: aiMode === "translate" ? "Auto detect" : null, targetLanguage: aiMode === "translate" ? aiLanguage : null,
+        guidance: null,
       } });
       setAiOutput(response.srtText); setAiResultMeta(response);
       setAiResultMode(aiMode); setAiResultLanguage(aiMode === "translate" ? aiLanguage : "");
@@ -389,8 +419,8 @@ export default function App() {
       setAiResultStrength(aiMode === "clean" ? aiCleanupStrength : null);
       if (aiMode === "clean") { setAiCleanedSource(response.srtText); setAiTranslateSource("original"); }
       setAiProgress({ phase: "complete", label: response.droppedCueCount ? `AI result ready · ${response.droppedCueCount} noise cues removed` : "AI result ready", received: 1, total: 1 });
-    } catch (reason) { setAiError(String(reason)); }
-    finally { setAiBusy(false); }
+    } catch (reason) { setAiError(String(reason)); setAiProgress(null); }
+    finally { setAiBusy(false); setAiCancelling(false); }
   }
 
   async function runAiAction() {
@@ -398,46 +428,26 @@ export default function App() {
       await chooseAiSubtitle();
       return;
     }
-    if (aiProvider === "deepl") {
-      if (aiMode !== "translate") {
-        setAiProvider("local");
-        setAiError("DeepL is available only for translation.");
-        return;
-      }
-      if (!deeplApiKey.trim()) {
-        setDeeplSettingsOpen(true);
-        setAiError("Add a personal DeepL API key in the DeepL account shelf. API Free also requires its own key.");
-        return;
-      }
-      if (deeplPlan === "pro" && !allowBilledDeepl) {
-        setDeeplSettingsOpen(true);
-        setAiError("Confirm potentially billed DeepL API Pro access before translating.");
-        return;
-      }
-      if (aiSourceLanguage !== "Auto detect" && aiSourceLanguage === aiLanguage) {
-        setAiError("Source and target languages must be different for online translation.");
-        return;
-      }
-      if (!onlineConsent) {
-        setOnlineWarningOpen(true);
-        return;
-      }
-      await runAiProcessing();
-      return;
-    }
     if (!selectedAiModel) {
       setAiError("Select a local model.");
       return;
     }
-    if (!selectedAiModel.installed) {
-      await downloadAiModel(selectedAiModel.id);
+    if (aiComputeBackend === "cuda" && !selectedAiModel.gpuEligible) {
+      setAiError(selectedAiModel.gpuReason || "This model is unavailable on the selected GPU. Choose CPU or another model.");
+      return;
+    }
+    if (!selectedAiModel.installed || !aiComputeBackendReady) {
+      await downloadAiModel(selectedAiModel.id, true);
       return;
     }
     await runAiProcessing();
   }
 
   async function cancelAi() {
-    try { await invoke("cancel_ai"); } catch (reason) { setAiError(String(reason)); }
+    if (!aiBusy || aiCancellationRef.current) return;
+    aiCancellationRef.current = true;
+    setAiCancelling(true);
+    try { await invoke("cancel_ai"); } catch (reason) { setAiError(String(reason)); setAiCancelling(false); }
   }
 
   async function exportAiResult() {
@@ -450,35 +460,41 @@ export default function App() {
     try { setAiSavedPath(await invoke<string>("save_export", { destination, content: aiOutput, format: aiFormat })); setAiError(""); } catch (reason) { setAiError(String(reason)); }
   }
 
+  async function exportOriginalSrt() {
+    if (!aiSource || aiBusy) return;
+    const source = originalSrtExport(aiSource, aiSourceName, aiFormat);
+    const selected = await save({ defaultPath: joinPath(settings.defaultDirectory, source.filename), filters: [{ name: FORMAT_LABELS[source.format], extensions: [source.format] }] });
+    if (!selected) return;
+    const destination = selected.toLowerCase().endsWith(`.${source.format}`) ? selected : `${selected}.${source.format}`;
+    try { setAiSavedPath(await invoke<string>("save_export", { destination, content: source.content, format: source.format })); setAiError(""); } catch (reason) { setAiError(String(reason)); }
+  }
+
   const selectedAiModel = aiModels.find((model) => model.id === aiModelId);
-  const aiTranslationInput = aiInputForMode(aiSource, aiCleanedSource, "translate", aiTranslateSource);
-  const deeplCharacterEstimate = estimateSrtTextCharacters(aiTranslationInput);
-  const aiPercent = aiProgress?.total ? Math.min(100, Math.round(aiProgress.received / aiProgress.total * 100)) : null;
+  const recommendedAiModelId = [...aiModels].reverse().find((model) => aiComputeBackend === "cpu" || model.gpuEligible)?.id;
+  const selectedModelUnavailableOnGpu = aiComputeBackend === "cuda" && Boolean(selectedAiModel && !selectedAiModel.gpuEligible);
+  const aiPercent = aiProgress?.phase === "complete" ? aiBusy ? 99 : 100 : aiProgress?.total ? Math.min(99, Math.round(aiProgress.received / aiProgress.total * 100)) : null;
+  const componentPercent = componentProgressPercent(componentProgressMessage);
   const aiActionLabel = !aiSource
     ? "Open SRT to continue"
-    : aiProvider === "deepl" && aiMode === "translate"
-      ? "Translate with DeepL"
-      : !selectedAiModel?.installed
-      ? `Download ${selectedAiModel?.name || "a model"}`
-      : aiMode === "clean" ? "Clean subtitles" : `Translate to ${aiLanguage}`;
+    : aiMode === "clean" ? "Clean subtitles" : `Translate to ${aiLanguage}`;
   const aiActionStatus = !aiSource
     ? "An SRT subtitle is required before processing"
-    : aiProvider === "deepl" && aiMode === "translate"
-      ? "Sends subtitle text and scene context to DeepL only after confirmation"
+    : selectedModelUnavailableOnGpu
+      ? selectedAiModel?.gpuReason || "This model exceeds the available GPU memory. Choose CPU or another model."
       : selectedAiModel?.installed
       ? aiMode === "translate" && aiCleanedSource
         ? `Will translate the ${aiTranslateSource === "cleaned" ? "cleaned result" : "original SRT"}`
         : aiMode === "clean"
           ? `${CLEANUP_STRENGTH_LABELS[aiCleanupStrength]} cleanup runs locally on this PC`
           : "Runs locally on this PC"
-      : "The selected model must be downloaded before processing";
+      : `First use downloads the verified ${selectedAiModel?.name || "local model"} and ${aiComputeBackend === "cuda" ? "NVIDIA CUDA" : "CPU"} engine, then starts processing`;
 
-  const canOpenStep = (index: number) => index === 0 || index === 3 || index === 1 && Boolean(videoPath) || index === 2 && Boolean(result);
+  const canOpenStep = (index: number) => index === 0 || index === 2 || index === 1 && Boolean(videoPath);
 
   return <main className="app-shell">
     <header className="topbar">
       <img className="brand-logo" src="/subhooper-logo.svg" alt="SubHooper" />
-      <nav className="step-tabs" aria-label="Workflow steps">{STEP_LABELS.map((label, index) => <button type="button" className={`${index === activeStep ? "active" : ""} ${index < activeStep || index === 2 && Boolean(result) ? "completed" : ""}`} disabled={!canOpenStep(index) || busy || aiBusy} onClick={() => setActiveStep(index)} key={label}><span>{index + 1}</span>{label}</button>)}</nav>
+      <nav className="step-tabs" aria-label="Workflow steps">{STEP_LABELS.map((label, index) => <button type="button" className={`${index === activeStep ? "active" : ""} ${index < activeStep || index === 1 && Boolean(result) ? "completed" : ""}`} disabled={!canOpenStep(index) || busy || aiBusy} onClick={() => setActiveStep(index)} key={label}><span>{index + 1}</span>{label}</button>)}</nav>
       <button className="icon-button" type="button" aria-label="Settings" onClick={() => setSettingsOpen(true)}><Icon name="settings" /></button>
     </header>
 
@@ -486,7 +502,7 @@ export default function App() {
       {activeStep === 0 && <section className="source-page page-enter">
         <button className={`drop-zone ${draggingFile ? "dragging" : ""}`} type="button" disabled={busy} onClick={chooseVideo}>
           <span className="drop-icon"><Icon name="folder" /></span>
-          <span className="drop-copy"><strong>{videoPath ? basename(videoPath) : "Upload a video file"}</strong><span>{videoPath ? "Ready to continue" : "Drag and drop a video here, or click to browse"}</span></span>
+          <span className="drop-copy"><strong>{videoPath ? basename(videoPath) : "Upload a Video File"}</strong><span>{videoPath ? "Ready to continue" : "Drag and drop a video here, or click to browse"}</span></span>
           {videoPath && <small>{videoPath}</small>}
         </button>
         <button className="page-action" type="button" disabled={!videoPath} onClick={() => setActiveStep(1)}>Next Step</button>
@@ -496,102 +512,70 @@ export default function App() {
         <div className="region-card">
           <div className="preview-column">
             <div className="video-preview" ref={previewRef}>
-              {previewUrl ? <video ref={videoRef} src={previewUrl} preload="metadata" onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} /> : <div className="video-fallback"><Icon name="video" /></div>}
-              <div className="selection-box" style={{ left: `${regionBox.x * 100}%`, top: `${regionBox.y * 100}%`, width: `${regionBox.w * 100}%`, height: `${regionBox.h * 100}%` }} onPointerDown={(event) => beginRegionDrag(event, "move")}>{(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as DragMode[]).map((mode) => <i className={`handle ${mode}`} onPointerDown={(event) => beginRegionDrag(event, mode)} key={mode} />)}</div>
+              {previewUrl ? <video ref={videoRef} src={previewUrl} preload="metadata" onLoadedMetadata={(event) => { setDuration(event.currentTarget.duration || 0); setVideoDimensions({ width: event.currentTarget.videoWidth, height: event.currentTarget.videoHeight }); }} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} /> : <div className="video-fallback"><Icon name="video" /></div>}
+              <div className="selection-box" style={{ left: `${displayedRegion.x * 100}%`, top: `${displayedRegion.y * 100}%`, width: `${displayedRegion.w * 100}%`, height: `${displayedRegion.h * 100}%` }} onPointerDown={(event) => beginRegionDrag(event, "move")}>{(["n", "s", "e", "w", "ne", "nw", "se", "sw"] as DragMode[]).map((mode) => <i className={`handle ${mode}`} onPointerDown={(event) => beginRegionDrag(event, mode)} key={mode} />)}</div>
             </div>
             <div className="video-controls"><button type="button" onClick={togglePreview} aria-label={playing ? "Pause" : "Play"}>{playing ? "Ⅱ" : "▶"}</button><input type="range" min="0" max={duration || 0} step="0.05" value={Math.min(currentTime, duration || 0)} onChange={(event) => seekPreview(Number(event.target.value))} /><time>{secondsLabel(Math.floor(currentTime))}</time></div>
           </div>
           <div className="preset-row">{(Object.keys(PRESETS) as Array<Exclude<RegionPreset, "Custom">>).map((value) => <button type="button" className={preset === value ? "selected" : ""} onClick={() => choosePreset(value)} key={value}><span className={`preset-icon preset-${value.toLowerCase()}`} />{PRESET_LABELS[value]}</button>)}</div>
-          <div className="compute-row" role="group" aria-label="Processing mode">
-            <button type="button" className={!cpuOnly ? "selected" : ""} disabled={busy} onClick={() => setCpuOnly(false)}><span><Icon name="gpu" /></span><strong>GPU Acceleration</strong><small>Automatic · NVIDIA when available</small></button>
-            <button type="button" className={cpuOnly ? "selected" : ""} disabled={busy} onClick={() => setCpuOnly(true)}><span><Icon name="cpu" /></span><strong>CPU Only</strong><small>Compatibility mode</small></button>
+          <div className="compute-options">
+            <div className="compute-row" role="group" aria-label="OCR processing mode">
+              {(["mixed", "cpu"] as OcrComputeMode[]).map((mode) => <button type="button" className={ocrComputeMode === mode ? "selected" : ""} aria-pressed={ocrComputeMode === mode} disabled={busy} onClick={() => setOcrComputeMode(mode)} key={mode}><strong>{mode === "mixed" ? "GPU + CPU" : "CPU"}</strong>{ocrRecommendedMode === mode && <small className="compute-recommended">Recommended</small>}</button>)}
+            </div>
           </div>
         </div>
         {error && <div className="error-card"><strong>Processing failed</strong><p>{error}</p></div>}
-        <div className="extract-row"><button className={`extract-action ${busy ? "running" : ""}`} type="button" disabled={!videoPath || busy} onClick={start}><i className="extract-progress" style={{ width: `${progress}%` }} /><i className="extract-sweep" />{busy ? <><span className="extract-spinner" /><span className="extract-copy"><strong>{stage.label} · {secondsLabel(elapsed)}</strong><small title={currentLog}>{currentLog}</small></span><b>~{progress}%</b></> : <span className="extract-label">Extract Subtitles</span>}</button>{busy && <button className="cancel-action" type="button" onClick={cancel}>Cancel</button>}</div>
+        <div className="extract-row"><button className={`extract-action ${busy ? "running" : ""}`} type="button" disabled={!videoPath || busy} onClick={start}><i className={`extract-progress ${busy && stage.percent === null ? "indeterminate" : ""}`} style={stage.percent === null ? undefined : { width: `${stage.percent}%` }} /><i className="extract-sweep" />{busy ? <><span className="extract-spinner" /><span className="extract-copy"><strong>{stage.label} · {secondsLabel(elapsed)}</strong><small title={currentLog}>{currentLog}</small></span><b className={stage.percent === null ? "stage-activity-label" : ""}>{stage.percent === null ? "In progress" : `${stage.percent}%`}</b></> : <span className="extract-label">Extract Subtitles</span>}</button>{busy && <button className="cancel-action" type="button" onClick={cancel}>Cancel</button>}</div>
       </section>}
 
-      {activeStep === 2 && result && <section className="result-page page-enter">
-        <div className="result-heading"><div><h1>{summary.Subtitles || 0} subtitles extracted</h1><span className={`quality ${quality}`}>{quality === "good" ? "Ready" : "Review needed"}</span></div></div>
-        <div className="result-layout"><section className="editor-card"><div className="editor-toolbar"><span><Icon name="edit" /> Subtitles</span><small>{basename(videoPath)}</small></div><textarea value={srtDraft} onChange={(event) => setSrtDraft(event.target.value)} spellCheck={false} aria-label="Editable subtitles" /></section><aside className="result-sidebar">
-          <div className="metrics"><div><span>Scan</span><strong>{summary.VSFSeconds || "—"}s</strong></div><div><span>OCR</span><strong>{summary.OCRSeconds || "—"}s</strong></div><div><span>Device</span><strong>{summary.OCRCompute?.replace("_ACTIVE", "") || "—"}</strong></div><div><span>Flagged</span><strong>{summary.SuspiciousShortCues || "0"}</strong></div></div>
-          <button className="ai-action" type="button" onClick={openAiFromResult}><span className="ai-icon"><Icon name="spark" /></span><span className="ai-copy"><strong>Clean subtitles with AI</strong><small>Optional · original stays unchanged</small></span></button>
-          <div className="result-log" tabIndex={0}><pre>{logs.length ? logs.join("\n") : "—"}</pre></div>
-        </aside></div>
-        <div className="export-dock">
-          <div className="save-location"><Icon name={savedPath ? "check" : "folder"} /><span title={savedPath || settings.defaultDirectory || "Choose when saving"}>{savedPath ? `Saved to ${savedPath}` : `Save location · ${settings.defaultDirectory || "Choose when saving"}`}</span></div>
-          <div className="export-actions"><label><select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)} aria-label="File format">{(Object.keys(FORMAT_LABELS) as ExportFormat[]).map((value) => <option value={value} key={value}>{FORMAT_LABELS[value]}</option>)}</select><Icon name="chevron" /></label><button type="button" onClick={exportResult}><Icon name="download" /> Download</button></div>
-        </div>
-      </section>}
-
-      {activeStep === 3 && <section className="ai-page page-enter">
-        <div className="ai-page-heading">
-          <div className="ai-heading-title"><span className="ai-page-icon"><Icon name="spark" /></span><div className="ai-heading-copy"><p>Local cleanup · local or online translation</p><h1>AI Cleaning</h1><span>Normalize the subtitle language, remove OCR noise, review the result, and export a new copy.</span></div></div>
-          <div className="ai-heading-actions">
-            <div className="ai-mode-control" role="group" aria-label="AI task">
-              <button type="button" className={aiMode === "clean" ? "selected" : ""} disabled={aiBusy} onClick={() => { setAiMode("clean"); setAiProvider("local"); }}>Clean</button>
-              <button type="button" className={aiMode === "translate" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiMode("translate")}>Translate</button>
-              {aiMode === "clean" && <label><span>Language</span><select value={aiCleanupLanguage} disabled={aiBusy} onChange={(event) => setAiCleanupLanguage(event.target.value)}><option>Auto detect</option>{AI_LANGUAGES.map((language) => <option key={language}>{language}</option>)}</select></label>}
-              {aiMode === "translate" && <label><span>Target</span><select value={aiLanguage} disabled={aiBusy} onChange={(event) => setAiLanguage(event.target.value)}>{AI_LANGUAGES.map((language) => <option key={language}>{language}</option>)}</select></label>}
-            </div>
-            {aiBusy ? <button className="ai-cancel" type="button" onClick={cancelAi}>Cancel</button> : <button className="ai-run" type="button" disabled={Boolean(aiSource) && aiProvider === "local" && !selectedAiModel} onClick={runAiAction}><Icon name={aiProvider === "local" && aiSource && !selectedAiModel?.installed ? "download" : aiSource ? "spark" : "folder"} /> {aiActionLabel}</button>}
-            {aiMode === "clean" && <fieldset className="ai-clean-strength"><legend>Cleanup strength</legend><span>Cleanup strength</span>{(Object.keys(CLEANUP_STRENGTH_LABELS) as AiCleanupStrength[]).map((strength) => <button type="button" key={strength} className={aiCleanupStrength === strength ? "selected" : ""} disabled={aiBusy} aria-pressed={aiCleanupStrength === strength} title={CLEANUP_STRENGTH_HELP[strength]} onClick={() => setAiCleanupStrength(strength)}>{CLEANUP_STRENGTH_LABELS[strength]}</button>)}<small>{CLEANUP_STRENGTH_HELP[aiCleanupStrength]}</small></fieldset>}
-            {aiMode === "translate" && aiCleanedSource && <fieldset className="ai-translate-source"><legend>Translate from</legend><button type="button" className={aiTranslateSource === "original" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiTranslateSource("original")}><span>Original SRT</span><small>Use the imported subtitle</small></button><button type="button" className={aiTranslateSource === "cleaned" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiTranslateSource("cleaned")}><span>Cleaned result</span><small>Use the latest edited cleanup</small></button></fieldset>}
-            <span className="ai-action-status">{aiProvider === "deepl" ? `DeepL API ${deeplPlan === "free" ? "Free" : "Pro"}` : selectedAiModel?.name || "Select a model"} · {aiActionStatus}</span>
+      {activeStep === 2 && <section className="ai-page page-enter">
+        <div className="ai-controls">
+          <div className="ai-mode-control" role="group" aria-label="AI task">
+            <button type="button" className={aiMode === "clean" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiMode("clean")}>Clean</button>
+            <button type="button" className={aiMode === "translate" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiMode("translate")}>Translate</button>
+            {aiMode === "translate" && <label><span>Language</span><select value={aiLanguage} disabled={aiBusy} onChange={(event) => setAiLanguage(event.target.value)}>{AI_LANGUAGES.map((language) => <option key={language}>{language}</option>)}</select></label>}
           </div>
+            <div className="ai-source-control">
+            <button className="ai-source-pick" type="button" onClick={chooseAiSubtitle} disabled={aiBusy}><Icon name="folder" /><span><strong>{aiSourceName || "Open an SRT Subtitle"}</strong><small>{aiSource ? "Ready" : "Choose Source"}</small></span></button>
+          </div>
+          {aiMode === "clean" ? <fieldset className="ai-clean-strength"><legend>Cleanup strength</legend><span>Strength</span>{(Object.keys(CLEANUP_STRENGTH_LABELS) as AiCleanupStrength[]).map((strength) => <button type="button" key={strength} className={aiCleanupStrength === strength ? "selected" : ""} disabled={aiBusy} aria-pressed={aiCleanupStrength === strength} title={CLEANUP_STRENGTH_HELP[strength]} onClick={() => setAiCleanupStrength(strength)}>{CLEANUP_STRENGTH_LABELS[strength]}</button>)}</fieldset> : <div className="ai-clean-strength ai-translate-from">{aiCleanedSource ? <><span>Translate from</span><button type="button" className={aiTranslateSource === "original" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiTranslateSource("original")}>Original</button><button type="button" className={aiTranslateSource === "cleaned" ? "selected" : ""} disabled={aiBusy} onClick={() => setAiTranslateSource("cleaned")}>Cleaned</button></> : <span>Translate the original SRT</span>}</div>}
         </div>
-
-        <section className="ai-source-card">
-          <button type="button" onClick={chooseAiSubtitle} disabled={aiBusy}><Icon name="folder" /><span><strong>{aiSourceName || "Open an SRT subtitle"}</strong><small>{aiSource ? "Ready for processing" : "No video or extraction result is required"}</small></span></button>
-          {aiMode === "translate" && <div className="ai-guidance"><div className="ai-guidance-head"><span>Context & terminology <small>optional</small></span><label><small>Source</small><select value={aiSourceLanguage} disabled={aiBusy} onChange={(event) => setAiSourceLanguage(event.target.value)}><option>Auto detect</option>{AI_LANGUAGES.map((language) => <option key={language}>{language}</option>)}</select></label></div><textarea aria-label="Context and terminology" value={aiGuidance} maxLength={4000} disabled={aiBusy} onChange={(event) => setAiGuidance(event.target.value)} placeholder="Plot context, character names, relationships, preferred terms, tone, or honorifics. This is used with nearby subtitle cues." /></div>}
-        </section>
-
-        <section className="ai-model-section">
-          <div className="ai-section-heading"><div><h2>Choose a processing engine</h2><p>Local models stay on this PC. DeepL API Free is optional, free within its quota, and requires a personal API key.</p></div><span>Apache-2.0 models · MIT engine</span></div>
-          <div className="ai-model-grid">{aiModels.map((model) => <article className={`${aiProvider === "local" && model.id === aiModelId ? "selected" : ""} ${model.id === "qwen3-8b-q4km" ? "recommended" : ""}`} key={model.id} onClick={() => { if (!aiBusy) { setAiProvider("local"); setAiModelId(model.id); } }}>
-            {model.id === "qwen3-8b-q4km" && <b>Recommended</b>}
-            <div className="ai-model-title"><span className="ai-model-radio" /><div><h3>{model.name}</h3><small>{model.sizeLabel} · {model.memoryLabel}</small></div></div>
-            <p>{model.recommendation}</p>
-            <button type="button" disabled={aiBusy || model.installed} onClick={(event) => { event.stopPropagation(); downloadAiModel(model.id); }}>{model.installed ? <><Icon name="check" /> Ready</> : <><Icon name="download" /> Download</>}</button>
-          </article>)}
-          <article className={`ai-online-card ${aiProvider === "deepl" ? "selected" : ""} ${aiMode !== "translate" ? "unavailable" : ""}`} aria-disabled={aiMode !== "translate"} onClick={() => { if (!aiBusy && aiMode === "translate") { setAiProvider("deepl"); setAiError(""); } }}>
-            <b>Free online</b>
-            <div className="ai-model-title"><span className="ai-model-radio" /><div><h3>Online Translation</h3><small>DeepL API Free · personal key required</small></div></div>
-            <p>Higher-quality translation with nearby scene context. Free mode is locked to DeepL's no-billing API endpoint.</p>
-            <button type="button" disabled={aiBusy || aiMode !== "translate"} onClick={(event) => { event.stopPropagation(); if (aiMode === "translate") { setAiProvider("deepl"); setDeeplPlan("free"); setAllowBilledDeepl(false); setOnlineConsent(false); setDeeplSettingsOpen(true); setAiError(""); } }}>{aiMode === "translate" ? "Set up DeepL Free" : "Translation only"}</button>
-          </article></div>
-        </section>
-
-        {aiProvider === "deepl" && aiMode === "translate" && <section ref={deeplShelfRef} className={`deepl-shelf ${deeplSettingsOpen ? "open" : ""}`}>
-          <button className="deepl-shelf-toggle" type="button" aria-expanded={deeplSettingsOpen} onClick={() => setDeeplSettingsOpen((value) => !value)}><span><strong>DeepL account</strong><small>{deeplPlan === "free" ? "API Free · no-billing endpoint" : "API Pro · billed account"}{deeplApiKey ? " · key added for this session" : " · key required"}</small></span><Icon name="chevron" /></button>
-          {deeplSettingsOpen && <div className="deepl-settings">
-            <div className="deepl-intro"><h2>Personal DeepL API access</h2><p>DeepL requires an account key even on API Free. No shared key is bundled. The key stays in memory for this session and is never written to settings, results, or diagnostic logs.</p></div>
-            <label className="deepl-plan"><span>DeepL API plan</span><select value={deeplPlan} disabled={aiBusy} onChange={(event) => { const plan = event.target.value as DeepLPlan; setDeeplPlan(plan); setAllowBilledDeepl(false); setOnlineConsent(false); }}><option value="free">API Free — no billing endpoint</option><option value="pro">API Pro — potentially billed</option></select></label>
-            <label className="deepl-key"><span>Personal DeepL API key</span><input type="password" autoComplete="off" value={deeplApiKey} disabled={aiBusy} onChange={(event) => { setDeeplApiKey(event.target.value); setOnlineConsent(false); }} placeholder="Paste API key" /></label>
-            <div className="deepl-plan-note"><strong>{deeplPlan === "free" ? "Free endpoint locked" : "Paid plan selected"}</strong><span>Estimated source text: <b>{deeplCharacterEstimate.toLocaleString()}</b> characters. {deeplPlan === "free" ? "Requests can only use api-free.deepl.com. DeepL API Free includes 500,000 source characters per month and this mode cannot call the billed endpoint." : "Requests use the API Pro endpoint only after the separate billed-account confirmation below. DeepL account cost controls remain external to SubHooper."}</span></div>
-            {deeplPlan === "pro" && <label className="deepl-billed"><input type="checkbox" checked={allowBilledDeepl} disabled={aiBusy} onChange={(event) => { setAllowBilledDeepl(event.target.checked); setOnlineConsent(false); }} /><span>Allow this personal DeepL API Pro account to be billed under its existing plan and cost controls. SubHooper cannot subscribe, upgrade, or change spending limits.</span></label>}
-          </div>}
-        </section>}
-
-        {(aiBusy || aiProgress) && <div className={`ai-progress-card ${aiProgress?.phase === "complete" ? "complete" : ""}`}><div><strong>{aiProgress?.label || "Preparing local AI"}</strong><span>{aiPercent === null ? "Please wait" : `${aiPercent}%`}</span></div><i><b style={{ width: `${aiPercent ?? 18}%` }} /></i></div>}
-        {aiError && <div className="error-card ai-error"><strong>AI task stopped</strong><p>{aiError}</p></div>}
-
-        <section className="ai-workspace">
-          <div className="ai-editor"><header><span>Original SRT</span><small>{aiSourceName || "No file selected"}</small></header><textarea value={aiSource} onChange={(event) => { setAiSource(event.target.value); setAiOutput(""); setAiCleanedSource(""); setAiTranslateSource("original"); setAiResultMeta(null); setAiResultMode(null); setAiResultLanguage(""); setAiResultSource(null); setAiResultStrength(null); }} placeholder="Open an SRT file to begin." spellCheck={false} /></div>
-          <div className="ai-editor output"><header><span>AI result</span><small>{aiResultMeta ? `${aiResultMode === "clean" ? `Cleaned · ${aiResultStrength ? CLEANUP_STRENGTH_LABELS[aiResultStrength] : "Balanced"}` : `Translated from ${aiResultSource === "cleaned" ? "cleaned result" : "original"}`} · ${aiResultMeta.cueCount} cues${aiResultMeta.droppedCueCount ? ` · ${aiResultMeta.droppedCueCount} noise removed` : ""} · ${aiResultMeta.modelName}` : "A separate copy will appear here"}</small></header><textarea value={aiOutput} onChange={(event) => { const value = event.target.value; setAiOutput(value); if (aiResultMode === "clean") setAiCleanedSource(value); }} placeholder="The cleaned or translated result will appear here for review." spellCheck={false} /></div>
-        </section>
-
+        <div className="ai-workspace">
+          <section className="ai-editors" aria-label="Subtitle editors">
+            <div className="ai-editor"><header><span>Original SRT</span><small>{aiSourceName || "No file selected"}</small></header><textarea value={aiSource} onChange={(event) => { setAiSource(event.target.value); setAiOutput(""); setAiCleanedSource(""); setAiTranslateSource("original"); setAiResultMeta(null); setAiResultMode(null); setAiResultLanguage(""); setAiResultSource(null); setAiResultStrength(null); }} placeholder="Open an SRT file to begin." spellCheck={false} /></div>
+            <div className="ai-editor output"><header><span>AI Result</span><small>{aiResultMeta ? `${aiResultMode === "clean" ? `Cleaned · ${aiResultStrength ? CLEANUP_STRENGTH_LABELS[aiResultStrength] : "Balanced"}` : `Translated from ${aiResultSource === "cleaned" ? "cleaned result" : "original"}`} · ${aiResultMeta.cueCount} cues${aiResultMeta.droppedCueCount ? ` · ${aiResultMeta.droppedCueCount} noise removed` : ""} · ${aiResultMeta.modelName}` : "Result"}</small></header><textarea value={aiOutput} onChange={(event) => { const value = event.target.value; setAiOutput(value); if (aiResultMode === "clean") setAiCleanedSource(value); }} placeholder="The result will appear here for review." spellCheck={false} /></div>
+            <div className="ai-task-row" aria-live="polite">
+              <div className={`ai-feedback ${aiError ? "has-error" : ""}`} role="status">
+                <div className="ai-feedback-line"><strong>{aiError ? "AI task stopped" : aiProgress?.label || (aiSource ? "Ready to process subtitles" : "Open an SRT subtitle to begin")}</strong><span>{aiPercent === null ? aiBusy ? "Working" : "" : `${aiPercent}%`}</span></div>
+                {aiError && <p title={aiError}>{aiError}</p>}
+                <div className="ai-feedback-track"><b className={aiBusy && aiPercent === null ? "indeterminate" : ""} style={{ width: `${aiPercent ?? 0}%` }} /></div>
+              </div>
+              <div className="ai-task-actions"><button className={`ai-run ai-primary-action ${aiBusy ? "ai-cancel" : ""}`} type="button" aria-label={aiBusy ? "Cancel AI task" : aiActionLabel} title={aiBusy ? "Cancel the current AI task" : aiActionStatus} disabled={aiBusy ? aiCancelling : Boolean(aiSource) && (!selectedAiModel || selectedModelUnavailableOnGpu)} onClick={aiBusy ? cancelAi : runAiAction}>{aiBusy ? aiCancelling ? "Cancelling…" : "Cancel" : aiMode === "clean" ? "Clean Subtitles" : "Translate Subtitles"}</button></div>
+            </div>
+          </section>
+          <aside className="ai-model-section" aria-label="Local processing models">
+          <label className="ai-compute-select"><span>Hardware</span><select value={aiComputeBackend} disabled={aiBusy} onChange={(event) => void selectAiBackend(event.target.value as AiComputeBackend)}><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
+            <div className="ai-model-grid">{aiModels.map((model) => {
+              const gpuUnavailable = aiComputeBackend === "cuda" && !model.gpuEligible;
+              const unavailableReason = model.gpuReason || "Insufficient GPU VRAM. Choose CPU or a smaller model.";
+              return <article className={`${model.id === aiModelId ? "selected" : ""} ${gpuUnavailable ? "unavailable" : ""}`} key={model.id} title={gpuUnavailable ? unavailableReason : model.recommendation} aria-disabled={gpuUnavailable || aiBusy} aria-checked={model.id === aiModelId} role="radio" tabIndex={gpuUnavailable || aiBusy ? -1 : 0} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !gpuUnavailable && !aiBusy) { event.preventDefault(); void selectAiModel(model.id); } }} onClick={() => { if (!aiBusy && !gpuUnavailable) void selectAiModel(model.id); }}>
+                <div className="ai-model-title"><h3>{model.name}</h3><small>{model.sizeLabel} Model · Min. GPU VRAM {model.minimumGpuMib / 1024} GB</small></div>
+                <p className="ai-model-description">{model.recommendation}</p>
+                {gpuUnavailable ? <div className="ai-model-limit"><small>{unavailableReason}</small><b>Insufficient GPU VRAM</b></div> : <div className="ai-model-flags">{model.id === recommendedAiModelId && <b>Recommended</b>}{model.modelCached || model.installed ? <small>Downloaded</small> : <button type="button" onClick={(event) => { event.stopPropagation(); void importAiModel(model.id); }}>Import GGUF</button>}</div>}
+              </article>;
+            })}</div>
+          </aside>
+        </div>
         <div className="export-dock ai-export">
           <div className="save-location"><Icon name={aiSavedPath ? "check" : "folder"} /><span title={aiSavedPath || settings.defaultDirectory || "Choose when saving"}>{aiSavedPath ? `Saved to ${aiSavedPath}` : "AI output is always saved as a new file"}</span></div>
-          <div className="export-actions"><label><select value={aiFormat} onChange={(event) => setAiFormat(event.target.value as ExportFormat)} aria-label="AI export format">{(Object.keys(FORMAT_LABELS) as ExportFormat[]).map((value) => <option value={value} key={value}>{FORMAT_LABELS[value]}</option>)}</select><Icon name="chevron" /></label><button type="button" disabled={!aiOutput || aiBusy} onClick={exportAiResult}><Icon name="download" /> Download result</button></div>
+          <div className="export-actions"><label><select value={aiFormat} onChange={(event) => setAiFormat(event.target.value as ExportFormat)} aria-label="AI export format">{(Object.keys(FORMAT_LABELS) as ExportFormat[]).map((value) => <option value={value} key={value}>{FORMAT_LABELS[value]}</option>)}</select><Icon name="chevron" /></label><button type="button" disabled={!aiSource || aiBusy} onClick={exportOriginalSrt}><Icon name="download" /> Download Original Result</button><button type="button" disabled={!aiOutput || aiBusy} onClick={exportAiResult}><Icon name="download" /> Download AI Result</button></div>
         </div>
       </section>}
     </section>
 
     {settingsOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!componentBusy && !updateBusy) setSettingsOpen(false); }}><section className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><h2>Settings</h2><button type="button" disabled={componentBusy || updateBusy} aria-label="Close settings" onClick={() => setSettingsOpen(false)}>×</button></div><label className="setting-field"><span>Default folder</span><button type="button" onClick={chooseDefaultDirectory}><Icon name="folder" /><b>{settings.defaultDirectory || "Choose"}</b></button></label><label className="setting-field"><span>Default format</span><select value={settings.defaultFormat} onChange={(event) => setSettings((current) => ({ ...current, defaultFormat: event.target.value as ExportFormat }))}>{(Object.keys(FORMAT_LABELS) as ExportFormat[]).map((value) => <option value={value} key={value}>{FORMAT_LABELS[value]}</option>)}</select></label>
-      <section className="component-panel"><div className="settings-section-heading"><strong>Video extraction components</strong><span className={componentStatus?.ready ? "ready" : "missing"}>{componentStatus?.ready ? "Ready" : "Setup required"}</span></div><p>VideoSubFinder 6.10, its Microsoft Visual C++ runtime, a private Python 3.14.7 runtime, RapidVideOCR, RapidOCR, and ONNX Runtime are downloaded only when this setup is approved. They are stored outside the application folder and are not included in SubHooper.</p><div className="component-checks"><span>{componentStatus?.videoSubFinder ? "✓" : "○"} VideoSubFinder</span><span>{componentStatus?.ocrRuntime ? "✓" : "○"} OCR runtime</span></div>{!componentStatus?.ready && <label className="component-consent"><input type="checkbox" checked={componentConsent} disabled={componentBusy} onChange={(event) => setComponentConsent(event.target.checked)} /><span>Download from Microsoft, SourceForge, Python.org, and Python package repositories; accept the separate GPL-2.0, Python, Apache-2.0, and dependency licenses. A Microsoft-signed runtime may request administrator approval. No telemetry or account is added by SubHooper.</span></label>}{componentError && <p className="settings-error">{componentError}</p>}<button className="settings-action" type="button" disabled={componentBusy || componentStatus?.ready || !componentConsent} onClick={installRequiredComponents}>{componentBusy ? "Installing components..." : componentStatus?.ready ? "Components ready" : "Download and install components"}</button><small className="component-path" title={componentStatus?.installRoot}>{componentStatus?.installRoot || "%LOCALAPPDATA%\\SubHooper"}</small></section>
-      <section className="update-panel"><div className="settings-section-heading"><strong>Application updates</strong><span>0.3.7 beta</span></div><p>Signed updates are downloaded from this project's public GitHub Releases page and replace the installed application after approval.</p><p className="update-status">{updateMessage}</p><div className="update-actions"><button type="button" disabled={updateBusy} onClick={checkForUpdates}>{updateBusy ? "Please wait..." : "Check for updates"}</button>{availableUpdate && <button type="button" disabled={updateBusy} onClick={installAvailableUpdate}>Install {availableUpdate.version}</button>}</div></section>
+      <section className="component-panel"><div className="settings-section-heading"><strong>Video Extraction Components</strong><span className={componentStatus?.ready ? "ready" : "missing"}>{componentStatus?.ready ? componentStatus.gpuRuntime ? "Ready" : "CPU Ready" : "Setup Required"}</span></div><p>Downloads the verified OCR runtime and models. GPU + CPU uses NVIDIA CUDA or DirectML on compatible AMD/Intel graphics, including integrated GPUs. CPU is also available.</p><div className="component-checks"><span>{componentStatus?.ocrRuntime ? "✓" : "○"} CPU OCR Runtime</span><span>{componentStatus?.gpuRuntime ? "✓" : "○"} GPU + CPU OCR Runtime</span></div>{componentBusy && <div className="component-activity" role="status" aria-live="polite"><div className="component-activity-label"><i /> <span>{componentProgressMessage || "Preparing OCR components…"}</span>{componentPercent !== null && <strong>Download: {componentPercent}%</strong>}</div><div className="component-progress-track"><b className={componentPercent === null ? "indeterminate" : ""} style={componentPercent === null ? undefined : { width: `${componentPercent}%` }} /></div></div>}{<label className="component-consent"><input type="checkbox" checked={componentConsent} disabled={componentBusy} onChange={(event) => setComponentConsent(event.target.checked)} /><span>Accept the runtime and OCR dependency licenses to download.</span></label>}{componentError && <p className="settings-error">{componentError}</p>}<button className="settings-action" type="button" disabled={componentBusy || !componentConsent} onClick={installRequiredComponents}>{componentBusy ? "Installing…" : componentStatus?.ready ? "Verify Components" : "Download Components"}</button><small className="component-path" title={componentStatus?.installRoot}>{componentStatus?.installRoot || "%LOCALAPPDATA%\\SubHooper"}</small></section>
+      <section className="update-panel"><div className="settings-section-heading"><strong>Application Updates</strong><span>0.4.3 Beta</span></div><p>Signed updates are downloaded from this project's public GitHub Releases page and replace the installed application after approval.</p><p className="update-status">{updateMessage}</p><div className="update-actions"><button type="button" disabled={updateBusy} onClick={checkForUpdates}>{updateBusy ? "Please Wait..." : "Check for Updates"}</button>{availableUpdate && <button type="button" disabled={updateBusy} onClick={installAvailableUpdate}>Install {availableUpdate.version}</button>}</div></section>
       <button className="modal-save" type="button" disabled={componentBusy || updateBusy} onClick={storeSettings}>Save Settings</button></section></div>}
-    {onlineWarningOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setOnlineWarningOpen(false)}><section className="online-warning-modal" role="dialog" aria-modal="true" aria-label="Online translation warning" onMouseDown={(event) => event.stopPropagation()}><div className="modal-heading"><h2>Online data transfer</h2><button type="button" aria-label="Close warning" onClick={() => setOnlineWarningOpen(false)}>×</button></div><p>The selected subtitle text, nearby dialogue used as context, and optional terminology guidance will be sent directly to DeepL for translation.</p><ul><li>Video, OCR images, local paths, and SubHooper reports are not sent.</li><li>SubHooper includes no shared API key and receives no payment.</li><li>{deeplPlan === "free" ? "API Free mode is locked to DeepL's no-billing endpoint and stops when the free quota is exhausted." : "API Pro may charge the selected personal account under its existing DeepL plan and cost controls."}</li><li>Confidential material should be sent only when the selected DeepL plan and data policy are acceptable.</li></ul><div className="online-warning-actions"><button type="button" onClick={() => setOnlineWarningOpen(false)}>Cancel</button><button type="button" onClick={() => { setOnlineConsent(true); setOnlineWarningOpen(false); void runAiProcessing(); }}>I understand — translate</button></div></section></div>}
   </main>;
 }

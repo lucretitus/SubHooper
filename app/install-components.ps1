@@ -1,56 +1,124 @@
 [CmdletBinding()]
 param()
-
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-if ([string]::IsNullOrWhiteSpace($localAppData)) {
-    throw 'Windows LocalAppData could not be resolved.'
-}
-
-$componentRoot = [System.IO.Path]::Combine($localAppData, 'SubHooper', 'components')
-$downloadRoot = [System.IO.Path]::Combine($localAppData, 'SubHooper', 'downloads')
-$runtimeRoot = [System.IO.Path]::Combine($localAppData, 'SubHooper', 'runtime', 'ocr-cpu-py314-auto')
-$vsfRoot = [System.IO.Path]::Combine($componentRoot, 'VideoSubFinder-6.10')
-$vsfExe = [System.IO.Path]::Combine($vsfRoot, 'Release_x64', 'VideoSubFinderWXW.exe')
-$pythonRoot = [System.IO.Path]::Combine($componentRoot, 'Python-3.14.7')
-$pythonExe = [System.IO.Path]::Combine($pythonRoot, 'python.exe')
-$runtimePython = [System.IO.Path]::Combine($runtimeRoot, 'Scripts', 'python.exe')
-$probe = [System.IO.Path]::Combine($PSScriptRoot, 'engine', 'probe.py')
-
-$vsfUrls = @(
-    'https://downloads.sourceforge.net/project/videosubfinder/VideoSubFinder_6.10_x64.zip',
-    'https://sourceforge.net/projects/videosubfinder/files/VideoSubFinder_6.10_x64.zip/download',
-    'https://master.dl.sourceforge.net/project/videosubfinder/VideoSubFinder_6.10_x64.zip?viasf=1'
-)
-$vsfSha256 = '3c0cc03793ec9753a6a4ee8a91c1d226c20b80aab901718f7c97d4fcb3580c0e'
-$pythonUrl = 'https://www.python.org/ftp/python/3.14.7/python-3.14.7-amd64.exe'
-$pythonSha256 = '9d9eb2709ef81bf5cd30db3c2096bdbc4ea10087c22e62f27d356b36f6ae9649'
-$vcRuntimeUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
-
+if ([string]::IsNullOrWhiteSpace($localAppData)) { throw 'Windows LocalAppData could not be resolved.' }
+$homeRoot = [IO.Path]::Combine($localAppData, 'SubHooper')
+$componentRoot = [IO.Path]::Combine($homeRoot, 'components')
+$downloadRoot = [IO.Path]::Combine($homeRoot, 'downloads')
+$runtimeRoot = [IO.Path]::Combine($homeRoot, 'runtime')
+$pythonRoot = [IO.Path]::Combine($componentRoot, 'Python-3.13.13')
+$pythonExe = [IO.Path]::Combine($pythonRoot, 'python.exe')
+$cpuRoot = [IO.Path]::Combine($runtimeRoot, 'native-ocr-cpu-py313-v040')
+$gpuRoot = [IO.Path]::Combine($runtimeRoot, 'native-ocr-cuda-py313-v040')
+$cpuPython = [IO.Path]::Combine($cpuRoot, 'Scripts', 'python.exe')
+$gpuPython = [IO.Path]::Combine($gpuRoot, 'Scripts', 'python.exe')
+$dmlRoot = [IO.Path]::Combine($runtimeRoot, 'native-ocr-dml-py313-v043')
+$dmlPython = [IO.Path]::Combine($dmlRoot, 'Scripts', 'python.exe')
+$modelRoot = [IO.Path]::Combine($componentRoot, 'native-ocr-models')
+$probe = [IO.Path]::Combine($PSScriptRoot, 'engine', 'probe.py')
+$downloadModels = [IO.Path]::Combine($PSScriptRoot, 'engine', 'download_models.py')
+$pythonUrl = 'https://www.python.org/ftp/python/3.13.13/python-3.13.13-amd64.exe'
+$pythonSha256 = '3c9c81d80f91c002ced86d645422d81432c68c7d9b6b0e974768ca2e449a4d00'
+$opencvWheel = [IO.Path]::Combine($downloadRoot, 'opencv_python_headless-4.14.0.94-cp37-abi3-win_amd64.whl')
+$opencvUrl = 'https://files.pythonhosted.org/packages/ad/8d/db8673846ee53cbb5de4c2b4decc11cf733e203eb7d5146297869f69bd48/opencv_python_headless-4.14.0.94-cp37-abi3-win_amd64.whl'
+$opencvSha256 = 'cbed65415b8f6a9541c705afe3e64795840524d0ff3bc58f507826284a1dc64b'
+$pythonMaxBytes = 128MB
+$opencvMaxBytes = 256MB
 function Invoke-ComponentDownload {
     param(
         [Parameter(Mandatory=$true)][string]$Url,
-        [Parameter(Mandatory=$true)][string]$Destination
+        [Parameter(Mandatory=$true)][string]$Destination,
+        [Parameter(Mandatory=$true)][long]$MaximumBytes
     )
 
-    $curl = Get-Command 'curl.exe' -ErrorAction SilentlyContinue
-    if ($null -ne $curl) {
-        $curlArguments = @(
-            '--silent', '--show-error', '--location', '--fail',
-            '--retry', '3', '--retry-delay', '2', '--connect-timeout', '30',
-            '--output', $Destination, $Url
-        )
-        & $curl.Source @curlArguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "curl.exe exited with code $LASTEXITCODE."
+    $response = $null
+    $inputStream = $null
+    $outputStream = $null
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $requestUri = [Uri]$Url
+        for ($redirectCount = 0; $redirectCount -le 10; $redirectCount++) {
+            if (-not $requestUri.IsAbsoluteUri -or $requestUri.Scheme -ne 'https') {
+                throw [IO.InvalidDataException]::new('Component downloads require HTTPS, including redirects.')
+            }
+            $request = [Net.HttpWebRequest]::Create($requestUri)
+            $request.UserAgent = 'SubHooper/0.4.3'
+            $request.Timeout = 30000
+            $request.ReadWriteTimeout = 60000
+            $request.AllowAutoRedirect = $false
+            $response = $request.GetResponse()
+            if ([int]$response.StatusCode -notin @(301, 302, 303, 307, 308)) { break }
+            $location = $response.Headers['Location']
+            if ([string]::IsNullOrWhiteSpace($location) -or $redirectCount -eq 10) {
+                throw [IO.InvalidDataException]::new('Component download redirect is invalid or exceeds the limit.')
+            }
+            $nextUri = [Uri]::new($requestUri, $location)
+            $response.Dispose()
+            $response = $null
+            $requestUri = $nextUri
         }
+        if ($response.ContentLength -gt $MaximumBytes) {
+            throw [IO.InvalidDataException]::new('Download size exceeds the configured artifact limit.')
+        }
+        $inputStream = $response.GetResponseStream()
+        $outputStream = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $buffer = New-Object byte[] (256 * 1024)
+        $received = [long]0
+        $nextUpdate = [long](1024 * 1024)
+        while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            if ($received + $count -gt $MaximumBytes) {
+                throw [IO.InvalidDataException]::new('Download size exceeds the configured artifact limit.')
+            }
+            $outputStream.Write($buffer, 0, $count)
+            $received += $count
+            if ($received -ge $nextUpdate) {
+                $mb = [Math]::Round($received / 1MB, 1)
+                if ($response.ContentLength -gt 0) {
+                    $percent = [Math]::Min(100, [Math]::Round(100 * $received / $response.ContentLength))
+                    Write-Output "Component download: $percent% ($mb MB)"
+                } else {
+                    Write-Output "Component download: $mb MB received"
+                }
+                $nextUpdate = $received + 1MB
+            }
+        }
+        Write-Output "Component download complete: $([Math]::Round($received / 1MB, 1)) MB"
         return
+    } catch {
+        if ($_.Exception -is [IO.InvalidDataException]) { throw }
+        # Retain the curl fallback for hosts where Windows .NET proxy/TLS setup fails.
+        $failure = $_.Exception.Message
+        if ($outputStream) { $outputStream.Dispose(); $outputStream = $null }
+        if ($inputStream) { $inputStream.Dispose(); $inputStream = $null }
+        if ($response) { $response.Dispose(); $response = $null }
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        $curl = Get-Command 'curl.exe' -ErrorAction SilentlyContinue
+        if (-not $curl) { throw "Component download failed: $failure" }
+        $curlVersionText = (& $curl.Source --version | Select-Object -First 1)
+        if ($curlVersionText -notmatch '^curl (\d+\.\d+\.\d+)') {
+            throw [IO.InvalidDataException]::new('Could not verify curl download size-limit support.')
+        }
+        if ([version]$Matches[1] -lt [version]'8.4.0') {
+            throw [IO.InvalidDataException]::new('Safe download fallback requires curl 8.4 or newer. Update Windows and retry.')
+        }
+        Write-Output "Retrying component download with curl.exe: $failure"
+        & $curl.Source --silent --show-error --location --fail --max-filesize $MaximumBytes `
+            --proto '=https' --proto-redir '=https' --max-redirs 10 `
+            --retry 3 --retry-delay 2 --connect-timeout 30 --max-time 600 `
+            --speed-time 30 --speed-limit 1024 --output $Destination $Url
+        if ($LASTEXITCODE -eq 63) { throw [IO.InvalidDataException]::new('Downloaded file exceeds the configured artifact limit.') }
+        if ($LASTEXITCODE -ne 0) { throw "curl.exe exited with code $LASTEXITCODE." }
+        if ([long](Get-Item -LiteralPath $Destination).Length -gt $MaximumBytes) {
+            throw [IO.InvalidDataException]::new('Downloaded file exceeds the configured artifact limit.')
+        }
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($response) { $response.Dispose() }
     }
-
-    Invoke-WebRequest -UseBasicParsing -MaximumRedirection 10 `
-        -Headers @{ 'User-Agent' = 'SubHooper/0.3.7' } `
-        -Uri $Url -OutFile $Destination
 }
 
 function Get-VerifiedDownload {
@@ -58,7 +126,8 @@ function Get-VerifiedDownload {
         [Parameter(Mandatory=$true)][string[]]$Urls,
         [Parameter(Mandatory=$true)][string]$Destination,
         [Parameter(Mandatory=$true)][string]$Sha256,
-        [Parameter(Mandatory=$true)][string]$Label
+        [Parameter(Mandatory=$true)][string]$Label,
+        [Parameter(Mandatory=$true)][long]$MaximumBytes
     )
     $expected = $Sha256.ToLowerInvariant()
     if ([System.IO.File]::Exists($Destination)) {
@@ -67,15 +136,14 @@ function Get-VerifiedDownload {
         Remove-Item -LiteralPath $Destination -Force
     }
 
-    $partial = "$Destination.partial"
     $lastFailure = 'No download attempt completed.'
     for ($sourceIndex = 0; $sourceIndex -lt $Urls.Count; $sourceIndex++) {
         $url = $Urls[$sourceIndex]
         foreach ($attempt in 1..3) {
-            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            $partial = "$Destination.$([guid]::NewGuid().ToString('N')).partial"
             Write-Output "Downloading $Label (source $($sourceIndex + 1)/$($Urls.Count), attempt $attempt/3)..."
             try {
-                Invoke-ComponentDownload -Url $url -Destination $partial
+                Invoke-ComponentDownload -Url $url -Destination $partial -MaximumBytes $MaximumBytes
                 if (-not [System.IO.File]::Exists($partial)) {
                     throw 'The downloader did not create a file.'
                 }
@@ -87,6 +155,7 @@ function Get-VerifiedDownload {
                 $length = (Get-Item -LiteralPath $partial).Length
                 $lastFailure = "Source returned an unverified file ($length bytes, SHA-256 $actual)."
             } catch {
+                if ($_.Exception -is [IO.InvalidDataException]) { throw }
                 $lastFailure = $_.Exception.Message
             } finally {
                 Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
@@ -126,88 +195,159 @@ function Expand-SafeZip {
     }
 }
 
-function Test-OcrRuntime {
-    if (-not [System.IO.File]::Exists($runtimePython)) { return $false }
+
+function Remove-LegacyOcrComponents([string]$ManagedHome) {
+    # Only exact obsolete SubHooper paths with recognizable component markers.
+    # Refuse junctions/symlinks in ancestors or descendants before recursive removal.
+    $base = [IO.Path]::GetFullPath($ManagedHome).TrimEnd('\', '/')
+    $entries = @(
+        @('components\VideoSubFinder-6.10', 'Release_x64\VideoSubFinderWXW.exe'),
+        @('runtime\ocr-cpu-py314-auto', 'Lib\site-packages\rapid_videocr'),
+        @('runtime\ocr-gpu-py314-auto', 'Lib\site-packages\rapid_videocr')
+    )
+    foreach ($entry in $entries) {
+        try {
+            $target = [IO.Path]::GetFullPath([IO.Path]::Combine($base, $entry[0]))
+            if (-not $target.StartsWith($base + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Legacy component path escaped the managed directory.'
+            }
+            if (-not (Test-Path -LiteralPath $target)) { continue }
+            $cursor = $target
+            while ($cursor) {
+                $item = Get-Item -LiteralPath $cursor -Force
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    throw 'Legacy component path contains a junction or symbolic link.'
+                }
+                $cursor = [IO.Path]::GetDirectoryName($cursor)
+            }
+            if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($target, $entry[1])))) {
+                throw 'Legacy component marker was not found.'
+            }
+            $pending = New-Object 'System.Collections.Generic.Stack[string]'
+            $pending.Push($target)
+            while ($pending.Count -gt 0) {
+                foreach ($child in (Get-ChildItem -LiteralPath $pending.Pop() -Force)) {
+                    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                        throw 'Legacy component contains a junction or symbolic link.'
+                    }
+                    if ($child.PSIsContainer) { $pending.Push($child.FullName) }
+                }
+            }
+            Remove-Item -LiteralPath $target -Recurse -Force
+            Write-Output "Removed obsolete OCR component: $($entry[0])"
+        } catch {
+            Write-Output "Legacy OCR cleanup skipped $($entry[0]): $($_.Exception.Message)"
+        }
+    }
+}
+
+function Test-NativeRuntime([string]$Executable) {
+    if (-not [IO.File]::Exists($Executable)) { return $false }
     $oldPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & $runtimePython $probe 2>&1 | Out-Null
+        & $Executable $probe $modelRoot 2>&1 | Out-Null
         return $LASTEXITCODE -eq 0
-    } catch {
-        return $false
-    } finally {
-        $ErrorActionPreference = $oldPreference
-    }
+    } catch { return $false }
+    finally { $ErrorActionPreference = $oldPreference }
 }
 
-function Test-VcRuntime {
-    $key = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' -ErrorAction SilentlyContinue
-    return $null -ne $key -and $key.Installed -eq 1
+function Install-VerifiedOpenCv([string]$Executable) {
+    Get-VerifiedDownload -Urls @($opencvUrl) -Destination $opencvWheel -Sha256 $opencvSha256 `
+        -Label 'OpenCV 4.14.0.94 Windows wheel' -MaximumBytes $opencvMaxBytes
+    & $Executable -m pip install --disable-pip-version-check --no-input --no-deps $opencvWheel
+    if ($LASTEXITCODE -ne 0) { throw 'The verified OpenCV wheel could not be installed.' }
 }
 
-function Install-VcRuntime {
-    if (Test-VcRuntime) { return }
-    $installer = [System.IO.Path]::Combine($downloadRoot, 'vc_redist.x64.exe')
-    Write-Output 'Downloading the Microsoft Visual C++ runtime required by VideoSubFinder...'
-    Invoke-WebRequest -UseBasicParsing -Uri $vcRuntimeUrl -OutFile $installer
-    $signature = Get-AuthenticodeSignature -LiteralPath $installer
-    if ($signature.Status -ne 'Valid' -or
-        $null -eq $signature.SignerCertificate -or
-        $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
-        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
-        throw 'The Microsoft Visual C++ runtime did not have a valid Microsoft signature.'
-    }
-    Write-Output 'Installing the Microsoft Visual C++ runtime...'
-    $process = Start-Process -FilePath $installer -ArgumentList @('/install', '/quiet', '/norestart') -Verb RunAs -Wait -PassThru
-    if ($process.ExitCode -notin @(0, 1638, 3010) -or -not (Test-VcRuntime)) {
-        throw "The Microsoft Visual C++ runtime installer exited with code $($process.ExitCode)."
+[IO.Directory]::CreateDirectory($componentRoot) | Out-Null
+[IO.Directory]::CreateDirectory($downloadRoot) | Out-Null
+[IO.Directory]::CreateDirectory($runtimeRoot) | Out-Null
+if (-not [IO.File]::Exists($pythonExe)) {
+    $installer = [IO.Path]::Combine($downloadRoot, 'python-3.13.13-amd64.exe')
+    Get-VerifiedDownload -Urls @($pythonUrl) -Destination $installer -Sha256 $pythonSha256 `
+        -Label 'Python 3.13.13 runtime' -MaximumBytes $pythonMaxBytes
+    [IO.Directory]::CreateDirectory($pythonRoot) | Out-Null
+    $arguments = @('/quiet','InstallAllUsers=0','PrependPath=0','Include_launcher=0',
+        'Include_test=0','Include_doc=0','Include_tcltk=0','Shortcuts=0',"TargetDir=`"$pythonRoot`"")
+    $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+    if ($process.ExitCode -ne 0 -or -not [IO.File]::Exists($pythonExe)) {
+        throw "The private Python runtime installer exited with code $($process.ExitCode)."
     }
 }
-
-[System.IO.Directory]::CreateDirectory($componentRoot) | Out-Null
-[System.IO.Directory]::CreateDirectory($downloadRoot) | Out-Null
-Install-VcRuntime
-
-if (-not [System.IO.File]::Exists($vsfExe)) {
-    $vsfArchive = [System.IO.Path]::Combine($downloadRoot, 'VideoSubFinder_6.10_x64.zip')
-    Get-VerifiedDownload -Urls $vsfUrls -Destination $vsfArchive -Sha256 $vsfSha256 -Label 'VideoSubFinder 6.10'
-    Write-Output 'Installing VideoSubFinder 6.10...'
-    $vsfStaging = "$vsfRoot.staging"
-    if ([System.IO.Directory]::Exists($vsfStaging)) { Remove-Item -LiteralPath $vsfStaging -Recurse -Force }
-    Expand-SafeZip -Archive $vsfArchive -Destination $vsfStaging
-    if (-not [System.IO.File]::Exists([System.IO.Path]::Combine($vsfStaging, 'Release_x64', 'VideoSubFinderWXW.exe'))) {
-        throw 'The VideoSubFinder archive does not contain the expected Windows executable.'
+# The downloader verifies each version-pinned ONNX asset and dictionary by SHA-256.
+& $pythonExe $downloadModels $modelRoot
+if ($LASTEXITCODE -ne 0) { throw 'Could not download and verify the OCR model assets.' }
+if (-not (Test-NativeRuntime $cpuPython)) {
+    if (Test-Path -LiteralPath $cpuRoot) { Remove-Item -LiteralPath $cpuRoot -Recurse -Force }
+    & $pythonExe -m venv $cpuRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create the OCR CPU environment.' }
+    Write-Output 'Installing pinned native OCR CPU packages...'
+    & $cpuPython -m pip install --disable-pip-version-check --no-input `
+        'numpy==2.2.6' 'onnxruntime==1.22.1'
+    if ($LASTEXITCODE -ne 0) { throw 'The OCR CPU packages could not be installed.' }
+    Install-VerifiedOpenCv $cpuPython
+    if (-not (Test-NativeRuntime $cpuPython)) {
+        throw 'The OCR CPU environment failed validation.'
     }
-    if ([System.IO.Directory]::Exists($vsfRoot)) { Remove-Item -LiteralPath $vsfRoot -Recurse -Force }
-    Move-Item -LiteralPath $vsfStaging -Destination $vsfRoot
 }
-
-if (-not (Test-OcrRuntime)) {
-    if (-not [System.IO.File]::Exists($pythonExe)) {
-        $pythonInstaller = [System.IO.Path]::Combine($downloadRoot, 'python-3.14.7-amd64.exe')
-        Get-VerifiedDownload -Urls @($pythonUrl) -Destination $pythonInstaller -Sha256 $pythonSha256 -Label 'Python 3.14.7 runtime'
-        Write-Output 'Installing the private Python runtime...'
-        [System.IO.Directory]::CreateDirectory($pythonRoot) | Out-Null
-        $arguments = @(
-            '/quiet', 'InstallAllUsers=0', 'PrependPath=0', 'Include_launcher=0',
-            'Include_test=0', 'Include_doc=0', 'Include_tcltk=0', 'Shortcuts=0',
-            "TargetDir=$pythonRoot"
-        )
-        $process = Start-Process -FilePath $pythonInstaller -ArgumentList $arguments -Wait -PassThru
-        if ($process.ExitCode -ne 0 -or -not [System.IO.File]::Exists($pythonExe)) {
-            throw "The private Python runtime installer exited with code $($process.ExitCode)."
+# CUDA is optional. The verified CPU path remains usable if installation fails.
+$cudaDevice = $false
+if (Get-Command 'nvidia-smi.exe' -ErrorAction SilentlyContinue) {
+    $previousGpuPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $deviceNames = & nvidia-smi.exe --query-gpu=name --format=csv,noheader 2>$null
+        $cudaDevice = $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($deviceNames | Out-String))
+    } finally { $ErrorActionPreference = $previousGpuPreference }
+}
+if ($cudaDevice) {
+    if (-not (Test-NativeRuntime $gpuPython)) {
+        try {
+            if (Test-Path -LiteralPath $gpuRoot) { Remove-Item -LiteralPath $gpuRoot -Recurse -Force }
+            & $pythonExe -m venv $gpuRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create the OCR CUDA environment.' }
+            Write-Output 'Installing pinned native OCR CUDA packages...'
+            & $gpuPython -m pip install --disable-pip-version-check --no-input `
+                'numpy==2.2.6' 'onnxruntime-gpu[cuda,cudnn]==1.22.0' `
+                'nvidia-cuda-runtime-cu12==12.9.79' `
+                'nvidia-cudnn-cu12==9.26.0.51' `
+                'nvidia-cublas-cu12==12.9.1.4' `
+                'nvidia-cuda-nvrtc-cu12==12.9.86' `
+                'nvidia-cufft-cu12==11.4.1.4' `
+                'nvidia-curand-cu12==10.3.10.19' `
+                'nvidia-nvjitlink-cu12==12.9.86'
+            if ($LASTEXITCODE -ne 0) { throw 'The OCR CUDA packages could not be installed.' }
+            Install-VerifiedOpenCv $gpuPython
+            if (-not (Test-NativeRuntime $gpuPython)) {
+                throw 'The OCR CUDA environment failed validation.'
+            }
+        } catch {
+            Write-Output "CUDA setup unavailable; CPU OCR is ready. $($_.Exception.Message)"
         }
     }
-
-    Write-Output 'Creating the OCR environment...'
-    if ([System.IO.Directory]::Exists($runtimeRoot)) { Remove-Item -LiteralPath $runtimeRoot -Recurse -Force }
-    & $pythonExe -m venv $runtimeRoot
-    if ($LASTEXITCODE -ne 0) { throw 'Could not create the OCR virtual environment.' }
-    Write-Output 'Installing RapidVideOCR and the CPU inference runtime...'
-    & $runtimePython -m pip install --disable-pip-version-check --no-input `
-        'rapid_videocr==3.1.1' 'rapidocr==3.9.2' 'onnxruntime==1.29.0'
-    if ($LASTEXITCODE -ne 0) { throw 'Could not install the pinned OCR packages.' }
-    if (-not (Test-OcrRuntime)) { throw 'The OCR runtime failed its validation probe.' }
 }
-
-Write-Output 'SubHooper components are ready.'
+# DirectML is isolated from CUDA and CPU wheels, which share the onnxruntime namespace.
+# NVIDIA systems keep the validated CUDA runtime; other PCs try DirectX 12 GPU OCR.
+if (-not ($cudaDevice -and (Test-NativeRuntime $gpuPython)) -and -not (Test-NativeRuntime $dmlPython)) {
+    try {
+        if (Test-Path -LiteralPath $dmlRoot) { Remove-Item -LiteralPath $dmlRoot -Recurse -Force }
+        & $pythonExe -m venv $dmlRoot
+        if ($LASTEXITCODE -ne 0) { throw 'Could not create the OCR DirectML environment.' }
+        Write-Output 'Installing pinned native OCR DirectML packages...'
+        & $dmlPython -m pip install --disable-pip-version-check --no-input `
+            'numpy==2.2.6' 'onnxruntime-directml==1.22.0'
+        if ($LASTEXITCODE -ne 0) { throw 'The OCR DirectML packages could not be installed.' }
+        Install-VerifiedOpenCv $dmlPython
+        if (-not (Test-NativeRuntime $dmlPython)) {
+            throw 'The OCR models could not run on a DirectX 12 hardware adapter.'
+        }
+    } catch {
+        Write-Output "DirectML setup unavailable; CPU OCR is ready. $($_.Exception.Message)"
+    }
+}
+if (Test-NativeRuntime $cpuPython) {
+    Remove-LegacyOcrComponents $homeRoot
+} else {
+    throw 'Native OCR validation failed; legacy components were retained.'
+}
+Write-Output 'SubHooper native OCR components are ready.'

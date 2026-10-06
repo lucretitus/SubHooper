@@ -2,7 +2,8 @@
 param()
 
 $ErrorActionPreference = 'Stop'
-$readyMarker = Join-Path $PSScriptRoot '.gui-ready-v0.3.7'
+$env:VSLANG = '1033'
+$readyMarker = Join-Path $PSScriptRoot '.gui-ready-v0.4.3'
 $homeRoot = Split-Path $PSScriptRoot -Parent
 $reportsRoot = if ($env:SUBTITLE_REPORTS_ROOT) {
     [System.IO.Path]::GetFullPath($env:SUBTITLE_REPORTS_ROOT)
@@ -13,6 +14,8 @@ $reportsRoot = if ($env:SUBTITLE_REPORTS_ROOT) {
 }
 [System.IO.Directory]::CreateDirectory($reportsRoot) | Out-Null
 $env:SUBTITLE_REPORTS_ROOT = $reportsRoot
+$env:SUBHOOPER_STARTUP_TRACE = Join-Path $reportsRoot 'startup-0.4.3.log'
+Write-Host "Startup trace: $env:SUBHOOPER_STARTUP_TRACE"
 
 function Refresh-ProcessPath {
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -42,6 +45,34 @@ function Test-CompatibleNode {
     }
 }
 
+function Get-DevelopmentPort {
+    param([Parameter(Mandatory=$true)][int]$PreferredPort)
+
+    $loopback = [System.Net.IPAddress]::Loopback
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new($loopback, $PreferredPort)
+        $listener.Start()
+        return $PreferredPort
+    } catch {
+        $preferredError = $_.Exception.Message
+        Write-Host "Cannot bind 127.0.0.1:$PreferredPort ($preferredError); selecting an OS-assigned loopback port." -ForegroundColor Yellow
+    } finally {
+        if ($listener) { $listener.Stop() }
+    }
+
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new($loopback, 0)
+        $listener.Start()
+        return [int]$listener.LocalEndpoint.Port
+    } catch {
+        throw "Could not bind the preferred development port $PreferredPort or request an OS-assigned loopback port: $($_.Exception.Message)"
+    } finally {
+        if ($listener) { $listener.Stop() }
+    }
+}
+
 try {
     $releaseExe = Join-Path $homeRoot 'SubHooper.exe'
     if (Test-Path -LiteralPath $releaseExe -PathType Leaf) {
@@ -67,19 +98,53 @@ try {
     }
 
     $env:SUBTITLE_PROJECT_ROOT = $PSScriptRoot
-    $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-    Push-Location (Join-Path $PSScriptRoot 'gui')
+    $previousDevPort = $env:SUBHOOPER_DEV_PORT
+    $configPath = $null
+    $locationPushed = $false
     try {
-        $previousPreference = $ErrorActionPreference
+        $devPort = Get-DevelopmentPort -PreferredPort 1420
+        $devUrl = "http://127.0.0.1:$devPort"
+        $env:SUBHOOPER_DEV_PORT = [string]$devPort
+        Write-Host "Development server: $devUrl (loopback only)"
+        $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+        $configPath = Join-Path ([System.IO.Path]::GetTempPath()) ("subhooper-tauri-dev-{0}.json" -f [guid]::NewGuid().ToString('N'))
+        $tauriConfigPath = Join-Path $PSScriptRoot 'gui\src-tauri\tauri.conf.json'
+        $baseCsp = (Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json).app.security.csp
+        $devCsp = [System.Text.RegularExpressions.Regex]::new('(connect-src\s+[^;]+)').Replace(
+            $baseCsp,
+            ('$1 ws://127.0.0.1:' + $devPort),
+            1
+        )
+        if ($devCsp -eq $baseCsp) { throw 'Could not add the selected loopback port to the development CSP.' }
+        $devConfig = [ordered]@{
+            build = @{ devUrl = $devUrl }
+            app = @{ security = @{ devCsp = $devCsp } }
+        } | ConvertTo-Json -Depth 8 -Compress
+        [System.IO.File]::WriteAllText($configPath, $devConfig, [System.Text.UTF8Encoding]::new($false))
+        Push-Location (Join-Path $PSScriptRoot 'gui')
+        $locationPushed = $true
         try {
-            $ErrorActionPreference = 'Continue'
-            & $npm run tauri dev
-            $guiCode = $LASTEXITCODE
+            $previousPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                & $npm run tauri dev -- --config $configPath
+                $guiCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
         } finally {
-            $ErrorActionPreference = $previousPreference
+            if ($locationPushed) { Pop-Location }
         }
     } finally {
-        Pop-Location
+        if ($configPath) { Remove-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue }
+        if ($null -eq $previousDevPort) {
+            Remove-Item Env:SUBHOOPER_DEV_PORT -ErrorAction SilentlyContinue
+        } else {
+            $env:SUBHOOPER_DEV_PORT = $previousDevPort
+        }
+    }
+    if ($guiCode -ne 0) {
+        Write-Host "Development startup exited with code $guiCode. Vite and Tauri were configured for $devUrl; see the startup trace and GUI output for the bind failure details." -ForegroundColor Red
     }
     exit $guiCode
 } catch {

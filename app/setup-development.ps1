@@ -2,6 +2,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+$env:VSLANG = '1033'
 $guiRoot = Join-Path $PSScriptRoot 'gui'
 $reportsRoot = if ($env:SUBTITLE_REPORTS_ROOT) {
     [System.IO.Path]::GetFullPath($env:SUBTITLE_REPORTS_ROOT)
@@ -181,7 +182,7 @@ try {
         Pop-Location
     }
 
-    'READY' | Set-Content -LiteralPath (Join-Path $PSScriptRoot '.gui-ready-v0.3.7') -Encoding ASCII
+    'READY' | Set-Content -LiteralPath (Join-Path $PSScriptRoot '.gui-ready-v0.4.3') -Encoding ASCII
     Write-Host 'GUI development environment is ready.' -ForegroundColor Green
     Write-Host "Node=$(& $node --version)"
     Write-Host "Cargo=$(& $cargo --version)"

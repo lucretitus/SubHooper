@@ -1,78 +1,83 @@
 {
-    "$schema":  "https://schema.tauri.app/config/2",
-    "productName":  "SubHooper",
-    "version":  "0.3.7",
-    "identifier":  "com.subhooper.desktop",
-    "build":  {
-                  "beforeDevCommand":  "npm run dev",
-                  "devUrl":  "http://127.0.0.1:1420",
-                  "beforeBuildCommand":  "npm run build",
-                  "frontendDist":  "../dist"
-              },
-    "app":  {
-                "windows":  [
-                                {
-                                    "label":  "main",
-                                    "title":  "SubHooper",
-                                    "width":  1120,
-                                    "height":  900,
-                                    "minWidth":  760,
-                                    "minHeight":  700,
-                                    "center":  true,
-                                    "resizable":  true,
-                                    "fullscreen":  false,
-                                    "dragDropEnabled":  true
-                                }
-                            ],
-                "security":  {
-                                 "csp":  "default-src \u0027self\u0027; connect-src \u0027self\u0027 ipc: http://ipc.localhost; img-src \u0027self\u0027 asset: http://asset.localhost data:; media-src \u0027self\u0027 asset: http://asset.localhost blob:; style-src \u0027self\u0027 \u0027unsafe-inline\u0027; font-src \u0027self\u0027 data:",
-                                 "assetProtocol":  {
-                                                       "enable":  true,
-                                                       "scope":  [
-                                                                     "**"
-                                                                 ]
-                                                   }
-                             }
-            },
-    "bundle":  {
-                   "active":  true,
-                   "targets":  [
-                                   "nsis"
-                               ],
-                   "createUpdaterArtifacts":  true,
-                   "publisher":  "SubHooper",
-                   "copyright":  "Copyright Ãƒâ€šÃ‚Â© 2026 SubHooper contributors",
-                   "category":  "Utility",
-                   "shortDescription":  "Extract hardcoded subtitles from video on Windows",
-                   "longDescription":  "SubHooper connects VideoSubFinder and RapidVideOCR in a focused desktop workflow.",
-                   "icon":  [
-                                "icons/32x32.png",
-                                "icons/128x128.png",
-                                "icons/128x128@2x.png",
-                                "icons/icon.ico"
-                            ],
-                   "resources":  {
-                                     "../../engine":  "app/engine",
-                                     "../../run-pipeline.ps1":  "app/run-pipeline.ps1",
-                                     "../../install-components.ps1":  "app/install-components.ps1",
-                                     "../../VERSION.txt":  "app/VERSION.txt"
-                                 },
-                   "windows":  {
-                                   "nsis":  {
-                                                "installMode":  "perMachine",
-                                                "displayLanguageSelector":  false
-                                            }
-                               }
-               },
-    "plugins":  {
-                    "updater":  {
-                                    "pubkey":  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDN0ZFNTFCNEJFQ0FEMzMKUldRenJleExHK1Yvdk1vZ2pnai9OakExUWRkZlp6ZmQvQzBxU1dUMkdEeEtZUldxQzE1ajlqeVoK",
-                                    "endpoints":  [
-                                                      "https://github.com/lucretitus/SubHooper/releases/latest/download/latest.json"
-                                                  ],
-                                    "windows":  {
-                                                    "installMode":  "passive"
-                                                }
-                                }
-                }
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SubHooper",
+  "version": "0.4.3",
+  "identifier": "com.subhooper.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SubHooper",
+        "width": 1120,
+        "height": 900,
+        "minWidth": 760,
+        "minHeight": 700,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "publisher": "SubHooper",
+    "copyright": "Copyright (c) 2026 SubHooper contributors",
+    "category": "Utility",
+    "shortDescription": "Extract hardcoded subtitles from video on Windows",
+    "longDescription": "SubHooper extracts hardcoded subtitles with a local ONNX OCR engine and optional AI cleanup.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../engine/config.py": "app/engine/config.py",
+      "../../engine/download_models.py": "app/engine/download_models.py",
+      "../../engine/native_ocr.py": "app/engine/native_ocr.py",
+      "../../engine/pipeline.py": "app/engine/pipeline.py",
+      "../../engine/probe.py": "app/engine/probe.py",
+      "../../engine/runtime.py": "app/engine/runtime.py",
+      "../../run-pipeline.ps1": "app/run-pipeline.ps1",
+      "../../install-components.ps1": "app/install-components.ps1",
+      "../../VERSION.txt": "app/VERSION.txt",
+      "../../../LICENSE": "LICENSE",
+      "../../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDN0ZFNTFCNEJFQ0FEMzMKUldRenJleExHK1Yvdk1vZ2pnai9OakExUWRkZlp6ZmQvQzBxU1dUMkdEeEtZUldxQzE1ajlqeVoK",
+      "endpoints": [
+        "https://github.com/lucretitus/SubHooper/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

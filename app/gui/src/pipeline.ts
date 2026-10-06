@@ -15,11 +15,74 @@ export const IDLE_STAGE: PipelineStage = {
 export type ExportFormat = "srt" | "ttml" | "txt" | "md";
 export type AiMode = "clean" | "translate";
 export type AiTranslateSource = "original" | "cleaned";
+export type RegionBox = { x: number; y: number; w: number; h: number };
+export type RegionDragMode = "move" | "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+export type NormalizedRect = RegionBox;
+
+export function updateRegionBox(initial: RegionBox, mode: RegionDragMode, dx: number, dy: number): RegionBox {
+  const min = .08;
+  if (mode === "move") return { ...initial, x: Math.min(1 - initial.w, Math.max(0, initial.x + dx)), y: Math.min(1 - initial.h, Math.max(0, initial.y + dy)) };
+  let left = initial.x;
+  let top = initial.y;
+  let right = initial.x + initial.w;
+  let bottom = initial.y + initial.h;
+  if (mode.includes("w")) left = Math.min(right - min, Math.max(0, initial.x + dx));
+  if (mode.includes("e")) right = Math.min(1, Math.max(left + min, initial.x + initial.w + dx));
+  if (mode.includes("n")) top = Math.min(bottom - min, Math.max(0, initial.y + dy));
+  if (mode.includes("s")) bottom = Math.min(1, Math.max(top + min, initial.y + initial.h + dy));
+  return { x: left, y: top, w: right - left, h: bottom - top };
+}
+
+export function containedVideoFrame(containerWidth: number, containerHeight: number, videoWidth: number, videoHeight: number): NormalizedRect {
+  if (containerWidth <= 0 || containerHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) {
+    return { x: 0, y: 0, w: 1, h: 1 };
+  }
+  const scale = Math.min(containerWidth / videoWidth, containerHeight / videoHeight);
+  const w = videoWidth * scale / containerWidth;
+  const h = videoHeight * scale / containerHeight;
+  return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+}
+
+export function regionBoxInFrame(region: RegionBox, frame: NormalizedRect): NormalizedRect {
+  return {
+    x: frame.x + region.x * frame.w,
+    y: frame.y + region.y * frame.h,
+    w: region.w * frame.w,
+    h: region.h * frame.h,
+  };
+}
 
 export type PipelineAiHandoff = {
   content: string;
   name: string;
 };
+
+export type OriginalSrtExport = {
+  content: string;
+  filename: string;
+  format: ExportFormat;
+};
+
+export function isPipelineCancellation(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return message.trim() === "Processing was cancelled.";
+}
+
+export function originalSrtExport(content: string, sourceName: string, format: ExportFormat = "srt"): OriginalSrtExport {
+  const name = basename(sourceName) || "subtitles.srt";
+  return {
+    content,
+    filename: `${name.replace(/\.(srt|ttml|txt|md)$/i, "")}.${format}`,
+    format,
+  };
+}
+
+export function componentProgressPercent(message: string): number | null {
+  const match = message.match(/^(?:Component download:|OCR model .+:)\s*(\d{1,3}(?:\.\d+)?)\s*%/);
+  if (!match) return null;
+  const percent = Number(match[1]);
+  return percent >= 0 && percent <= 100 ? percent : null;
+}
 
 export function pipelineAiHandoff(srtText: string, srtPath: string, videoPath: string): PipelineAiHandoff {
   return {
@@ -37,18 +100,6 @@ export function aiInputForMode(
   return mode === "translate" && translateSource === "cleaned" && cleaned
     ? cleaned
     : original;
-}
-
-export function estimateSrtTextCharacters(content: string): number {
-  let total = 0;
-  for (const block of content.replaceAll("\r\n", "\n").replaceAll("\r", "\n").trim().split(/\n{2,}/)) {
-    const lines = block.split("\n");
-    const timing = lines.findIndex((line) => line.includes("-->"));
-    if (timing < 0) continue;
-    const text = lines.slice(timing + 1).join("\n").trim();
-    total += Array.from(text).length;
-  }
-  return total;
 }
 
 export function outputFilename(videoPath: string, format: ExportFormat): string {

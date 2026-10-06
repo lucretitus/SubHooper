@@ -22,3 +22,24 @@ Thumbs.db
 .idea/
 .vscode/
 
+
+# Private development material
+.codex/
+AGENTS.md
+HANDOFF.md
+handoff/
+START_CODEX.cmd
+START_HERE.txt
+analysis/
+upload/
+output/
+*.7z
+*.zip
+.env
+.env.*
+*.pem
+*.pfx
+*.p12
+*.sig
+__pycache__/
+*.pyc

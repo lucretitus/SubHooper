@@ -1,5 +1,5 @@
 REGION_PROFILES = {
-    # Values are VideoSubFinder offsets expressed from the image bottom.
+    # Vertical bounds are offsets measured from the bottom of the frame.
     'bottom': {'top': '0.42', 'bottom': '0.02', 'left': '0.03', 'right': '0.97'},
     'lower-half': {'top': '0.55', 'bottom': '0', 'left': '0.02', 'right': '0.98'},
     'full': {'top': '1', 'bottom': '0', 'left': '0', 'right': '1'},
@@ -28,20 +28,3 @@ def get_region_profile(name):
     except KeyError as exc:
         choices = ', '.join(REGION_PROFILES)
         raise RuntimeError(f'Invalid subtitle region: {name}. Options: {choices}') from exc
-
-
-def build_vsf_command(executable, video, output, region_name, compute_mode='cpu', region_offsets=None):
-    region = (validate_region_offsets(**region_offsets)
-              if region_name == 'custom' and region_offsets else get_region_profile(region_name))
-    command = [executable, '-r', '-ccti', '-ovffmpeg', '-i', video, '-o', output,
-               '-te', region['top'], '-be', region['bottom'],
-               '-le', region['left'], '-re', region['right'],
-               '-nthr', '2', '-nocrthr', '2']
-    if compute_mode == 'cuda':
-        command.append('-uc')
-    elif compute_mode == 'cpu':
-        # VideoSubFinder exposes settings keys as command-line options.
-        command.extend(('-use_cuda_gpu', '0'))
-    else:
-        raise RuntimeError(f'Invalid compute mode: {compute_mode}')
-    return command
