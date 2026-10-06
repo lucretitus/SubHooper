@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/subhooper-logo.png" alt="SubHooper" width="280">
+  <img src="docs/images/subhooper_logo.png" alt="SubHooper" width="280">
 </p>
 
 <p align="center">
