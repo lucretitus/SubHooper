@@ -32,6 +32,6 @@ python -m unittest discover -s app/tests -v
 
 ## Releases
 
-The `v0.4.3` tag must match the version in the application configuration. The release workflow runs Windows checks and creates a draft installer release with signed update artifacts. Publish the draft after testing the installer.
+The `v0.4.4` tag must match the version in the application configuration. The release workflow runs Windows checks and creates a draft installer release with signed update artifacts. Publish the draft after testing the installer.
 
 Keep the existing updater public key. Signing secrets belong in GitHub Actions secrets, never in the repository. Do not commit models, downloaded runtimes, build output, videos, reports, results, or private keys.

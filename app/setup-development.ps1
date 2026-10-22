@@ -81,8 +81,9 @@ function Test-CompatibleNode {
     if (-not $nodeCommand) { return $false }
     try {
         $version = [version]((& $nodeCommand.Source --version).Trim().TrimStart('v'))
-        return (($version.Major -eq 20 -and $version -ge [version]'20.19.0') -or
-                ($version -ge [version]'22.12.0'))
+        return (($version.Major -eq 22 -and $version -ge [version]'22.23.4') -or
+                ($version.Major -eq 24 -and $version -ge [version]'24.22.1') -or
+                ($version -ge [version]'26.12.1'))
     } catch {
         return $false
     }
@@ -121,7 +122,7 @@ try {
         )
         Refresh-ProcessPath
         if (-not (Test-CompatibleNode)) {
-            throw 'Could not install Node.js 20.19+ or 22.12+.'
+            throw 'Could not install a security-patched Node.js LTS (22.23.4+ or 24.22.1+).'
         }
     }
 
@@ -182,7 +183,7 @@ try {
         Pop-Location
     }
 
-    'READY' | Set-Content -LiteralPath (Join-Path $PSScriptRoot '.gui-ready-v0.4.3') -Encoding ASCII
+    'READY' | Set-Content -LiteralPath (Join-Path $PSScriptRoot '.gui-ready-v0.4.4') -Encoding ASCII
     Write-Host 'GUI development environment is ready.' -ForegroundColor Green
     Write-Host "Node=$(& $node --version)"
     Write-Host "Cargo=$(& $cargo --version)"

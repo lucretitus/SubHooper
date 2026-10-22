@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.4
+
+### Security
+
+- Update TLS certificate validation and trust stores for distrusted emSign intermediates.
+- Update quinn-proto to fix packet and datagram handling denial-of-service issues.
+- Update the Tauri updater to prevent frontend code from overriding downgrade policy.
+- Update Vite, Vitest, and source-map-js security fixes.
+- Require security-patched Node.js versions for development and CI.
+
 ## 0.4.3
 
 ### Features

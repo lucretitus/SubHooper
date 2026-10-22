@@ -37,7 +37,7 @@ MAX_BYTES = {
 
 
 def _open_model_response(url):
-    headers = {"User-Agent": "SubHooper/0.4.3", "Cache-Control": "no-cache"}
+    headers = {"User-Agent": "SubHooper/0.4.4", "Cache-Control": "no-cache"}
     try:
         return urlopen(Request(url, headers=headers), timeout=60)
     except HTTPError as error:
