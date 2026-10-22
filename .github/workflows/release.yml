@@ -1,6 +1,7 @@
 name: Windows release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v[0-9]*'
@@ -36,13 +37,18 @@ jobs:
         working-directory: app/gui
         run: npm ci
       - name: Validate release metadata
+        id: release_metadata
         shell: pwsh
         run: |
           $config = Get-Content app/gui/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           $version = (Get-Content app/VERSION.txt -Raw).Trim()
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF_NAME -ne "v$version") {
             throw 'Release tag must match the application version.'
           }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:GITHUB_REF_NAME -ne 'main') {
+            throw 'Manual releases must run from main.'
+          }
+          "tag=v$version" >> $env:GITHUB_OUTPUT
           $expectedEndpoint = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/latest.json"
           if ($config.plugins.updater.endpoints.Count -ne 1 -or $config.plugins.updater.endpoints[0] -ne $expectedEndpoint) {
             throw 'The updater endpoint does not match this repository.'
@@ -67,8 +73,9 @@ jobs:
         with:
           projectPath: app/gui
           args: -- --locked
-          tagName: ${{ github.ref_name }}
-          releaseName: 'SubHooper ${{ github.ref_name }}'
+          tagName: ${{ steps.release_metadata.outputs.tag }}
+          releaseName: 'SubHooper ${{ steps.release_metadata.outputs.tag }}'
+          releaseCommitish: ${{ github.sha }}
           releaseBody: 'Local subtitle extraction, cleanup, and translation for Windows. See CHANGELOG.md for changes in this version.'
           releaseDraft: true
           prerelease: false
