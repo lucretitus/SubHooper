@@ -44,7 +44,7 @@ function Invoke-ComponentDownload {
                 throw [IO.InvalidDataException]::new('Component downloads require HTTPS, including redirects.')
             }
             $request = [Net.HttpWebRequest]::Create($requestUri)
-            $request.UserAgent = 'SubHooper/0.4.3'
+            $request.UserAgent = 'SubHooper/0.4.4'
             $request.Timeout = 30000
             $request.ReadWriteTimeout = 60000
             $request.AllowAutoRedirect = $false

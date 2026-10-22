@@ -53,7 +53,7 @@ const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "webm", "ts", "m2ts", "wmv", "m4v",
 ];
 const AI_MAX_SUBTITLE_BYTES: usize = 20 * 1024 * 1024;
-const AI_USER_AGENT: &str = "SubHooper/0.4.3";
+const AI_USER_AGENT: &str = "SubHooper/0.4.4";
 const AI_TARGET_CHUNK_SIZE: usize = 12;
 const AI_TRANSLATION_CHUNK_SIZE: usize = 8;
 const AI_CONTEXT_CUES: usize = 4;
@@ -2260,7 +2260,7 @@ fn persist_ai_diagnostic(
         .ok()?
         .as_millis();
     let content = format!(
-        "SubHooper=0.4.3-beta\nGeneratedUnixMs={timestamp}\nError={error}\nCLI={}\nModel={}\n\n--- OUTPUT FILE ---\n{}\n\n--- STDOUT ---\n{}\n\n--- STDERR ---\n{}\n",
+        "SubHooper=0.4.4-beta\nGeneratedUnixMs={timestamp}\nError={error}\nCLI={}\nModel={}\n\n--- OUTPUT FILE ---\n{}\n\n--- STDOUT ---\n{}\n\n--- STDERR ---\n{}\n",
         cli.display(),
         model_path.display(),
         ai_log_excerpt(output_file),
@@ -3671,7 +3671,7 @@ pub fn run() {
 
 pub fn startup_trace(phase: &str) {
     let message = format!(
-        "SubHooper 0.4.3 startup pid={} thread={:?} time_ms={} phase={phase}\n",
+        "SubHooper 0.4.4 startup pid={} thread={:?} time_ms={} phase={phase}\n",
         std::process::id(),
         std::thread::current().id(),
         SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_millis())
@@ -3680,7 +3680,7 @@ pub fn startup_trace(phase: &str) {
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::var_os("LOCALAPPDATA")
             .map(|root| PathBuf::from(root).join("SubHooper").join("reports"))
-            .unwrap_or_else(std::env::temp_dir).join("startup-0.4.3.log"));
+            .unwrap_or_else(std::env::temp_dir).join("startup-0.4.4.log"));
     if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
     if let Ok(mut log) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = log.write_all(message.as_bytes());

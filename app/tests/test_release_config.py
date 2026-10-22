@@ -73,7 +73,7 @@ class ReleaseConfigurationTests(unittest.TestCase):
         cargo = tomllib.loads(
             (ROOT / 'app' / 'gui' / 'src-tauri' / 'Cargo.toml').read_text(encoding='utf-8'))
 
-        self.assertEqual(expected, '0.4.3')
+        self.assertEqual(expected, '0.4.4')
         self.assertEqual(package['version'], expected)
         self.assertEqual(tauri['version'], expected)
         self.assertEqual(cargo['package']['version'], expected)

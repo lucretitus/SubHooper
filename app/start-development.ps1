@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $env:VSLANG = '1033'
-$readyMarker = Join-Path $PSScriptRoot '.gui-ready-v0.4.3'
+$readyMarker = Join-Path $PSScriptRoot '.gui-ready-v0.4.4'
 $homeRoot = Split-Path $PSScriptRoot -Parent
 $reportsRoot = if ($env:SUBTITLE_REPORTS_ROOT) {
     [System.IO.Path]::GetFullPath($env:SUBTITLE_REPORTS_ROOT)
@@ -14,7 +14,7 @@ $reportsRoot = if ($env:SUBTITLE_REPORTS_ROOT) {
 }
 [System.IO.Directory]::CreateDirectory($reportsRoot) | Out-Null
 $env:SUBTITLE_REPORTS_ROOT = $reportsRoot
-$env:SUBHOOPER_STARTUP_TRACE = Join-Path $reportsRoot 'startup-0.4.3.log'
+$env:SUBHOOPER_STARTUP_TRACE = Join-Path $reportsRoot 'startup-0.4.4.log'
 Write-Host "Startup trace: $env:SUBHOOPER_STARTUP_TRACE"
 
 function Refresh-ProcessPath {
@@ -38,8 +38,9 @@ function Test-CompatibleNode {
     if (-not $nodeCommand) { return $false }
     try {
         $version = [version]((& $nodeCommand.Source --version).Trim().TrimStart('v'))
-        return (($version.Major -eq 20 -and $version -ge [version]'20.19.0') -or
-                ($version -ge [version]'22.12.0'))
+        return (($version.Major -eq 22 -and $version -ge [version]'22.23.4') -or
+                ($version.Major -eq 24 -and $version -ge [version]'24.22.1') -or
+                ($version -ge [version]'26.12.1'))
     } catch {
         return $false
     }
